@@ -361,9 +361,9 @@ def route_parse(text: str) -> dict[str, Any]:
             }
             return gemini
         except Exception as exc:
-            local = parse_with_rules(normalized_text)
+            local = parse_with_offline_fallback(normalized_text)
             local["raw"] = {
-                "provider": "local_rules_after_gemini_error",
+                "provider": "offline_fallback_after_gemini_error",
                 "gemini_called": True,
                 "fallback_reason": "gemini_error",
                 "gemini_error": str(exc),
@@ -374,12 +374,12 @@ def route_parse(text: str) -> dict[str, Any]:
             }
             return local
 
-    local = parse_with_rules(normalized_text)
+    local = parse_with_offline_fallback(normalized_text)
     unknown_month_phrase = detect_unknown_month_date_phrase(normalized_text)
     if unknown_month_phrase is not None:
         clarified = unknown_month_date_clarification(normalized_text)
         clarified["raw"] = {
-            "provider": "local_query_clarification",
+            "provider": "offline_fallback_clarification",
             "gemini_called": False,
             "fallback_reason": "gemini_disabled_unknown_month_date_phrase",
             "unknown_phrase": unknown_month_phrase,
@@ -388,28 +388,11 @@ def route_parse(text: str) -> dict[str, Any]:
             "parser_version": PARSER_VERSION,
         }
         return clarified
-    fuzzy_date = detect_fuzzy_relative_period(normalized_text)
-    if should_use_gemini_for_fuzzy_date(local, fuzzy_date) and GEMINI_API_KEY:
-        extracted = extract_relative_period_with_gemini(normalized_text, fuzzy_date)
-        if extracted is not None:
-            parsed = parse_with_rules(replace_fuzzy_relative_period(normalized_text, fuzzy_date, extracted))
-            parsed_query = parsed.get("query")
-            if parsed.get("intent") != "unknown" and not (isinstance(parsed_query, dict) and parsed_query.get("needs_clarification")):
-                parsed["raw"] = {
-                    "provider": "local_rules_after_gemini_date_number",
-                    "gemini_called": True,
-                    "fallback_reason": "fuzzy_relative_date_number",
-                    "relative_period": extracted,
-                    "original_text": text,
-                    "normalized_text": normalized_text,
-                    "parser_version": PARSER_VERSION,
-                }
-                return parsed
     decision = local_route_decision(text, local)
     if not decision["use_local"] and not GEMINI_API_KEY and looks_like_messy_query(normalized_text):
         local = messy_query_clarification(normalized_text)
         local["raw"] = {
-            "provider": "local_query_clarification",
+            "provider": "offline_fallback_clarification",
             "gemini_called": False,
             "fallback_reason": "gemini_disabled_messy_query",
             "original_text": text,
@@ -419,7 +402,7 @@ def route_parse(text: str) -> dict[str, Any]:
         return local
     if decision["use_local"] or not GEMINI_API_KEY:
         local["raw"] = {
-            "provider": "local_rules",
+            "provider": "offline_fallback_rules",
             "gemini_called": False,
             "fallback_reason": decision["reason"] if decision["use_local"] else "gemini_disabled",
             "local_confidence": local.get("confidence", 0),
@@ -428,45 +411,6 @@ def route_parse(text: str) -> dict[str, Any]:
             "parser_version": PARSER_VERSION,
         }
         return local
-
-    try:
-        gemini = parse_with_gemini(normalized_text)
-    except Exception as exc:
-        local["raw"] = {
-            "provider": "local_rules_after_gemini_error",
-            "gemini_called": True,
-            "fallback_reason": "gemini_error",
-            "gemini_error": str(exc),
-            "local_confidence": local.get("confidence", 0),
-            "original_text": text,
-            "normalized_text": normalized_text,
-            "parser_version": PARSER_VERSION,
-        }
-        return local
-    if gemini.get("intent") == "unknown" and local.get("intent") != "unknown":
-        local["raw"] = {
-            "provider": "local_rules_after_gemini_unknown",
-            "gemini_called": True,
-            "fallback_reason": "gemini_unknown",
-            "gemini_raw": gemini,
-            "local_confidence": local.get("confidence", 0),
-            "original_text": text,
-            "normalized_text": normalized_text,
-            "parser_version": PARSER_VERSION,
-        }
-        return local
-
-    gemini["raw"] = {
-        "provider": "gemini",
-        "model": GEMINI_MODEL,
-        "gemini_called": True,
-        "fallback_reason": decision["reason"],
-        "local_confidence": local.get("confidence", 0),
-        "original_text": text,
-        "normalized_text": normalized_text,
-        "parser_version": PARSER_VERSION,
-    }
-    return gemini
 
 
 def normalize_chat_typos(text: str) -> str:
@@ -536,23 +480,12 @@ def local_route_decision(text: str, local: dict[str, Any]) -> dict[str, Any]:
             if is_typo_heavy_text(text):
                 return {"use_local": False, "reason": "query_date_needs_gemini"}
             return {"use_local": True, "reason": "query_date_needs_clarification"}
-        return {"use_local": True, "reason": "deterministic_query_date"}
+        return {"use_local": True, "reason": "offline_query_fallback"}
     if intent == "create_multiple_transactions" and isinstance(transactions, list) and len(transactions) > 1:
-        return {"use_local": True, "reason": "local_multi_transaction"}
+        return {"use_local": True, "reason": "offline_multi_transaction_fallback"}
     if intent in {"create_expense", "create_income"} and confidence >= LOCAL_CONFIDENCE_THRESHOLD and is_simple_transaction_text(text):
-        return {"use_local": True, "reason": "high_confidence_simple_transaction"}
+        return {"use_local": True, "reason": "offline_simple_transaction_fallback"}
     return {"use_local": False, "reason": "needs_gemini"}
-
-
-def should_use_gemini_for_fuzzy_date(local: dict[str, Any], fuzzy_date: dict[str, str] | None) -> bool:
-    if fuzzy_date is None:
-        return False
-    query = local.get("query")
-    if local.get("intent") == "unknown":
-        return True
-    if isinstance(query, dict) and query.get("needs_clarification"):
-        return True
-    return False
 
 
 def is_typo_heavy_text(text: str) -> bool:
@@ -806,82 +739,6 @@ def query_from_extracted_date_range(original_text: str, normalized_text: str, da
     return parsed
 
 
-def detect_fuzzy_relative_period(text: str) -> dict[str, str] | None:
-    match = re.search(r"\b(?P<phrase>[a-z\s]{2,40}?)\s+(?P<unit>hari|minggu|bulan)\s+(?:yang\s+)?lalu\b", text.lower())
-    if not match:
-        return None
-    phrase = re.sub(r"\s+", " ", match.group("phrase")).strip()
-    unit = match.group("unit")
-    if not phrase:
-        return None
-    if phrase.isdigit():
-        return None
-    if word_number_to_int(phrase) is not None:
-        return None
-    return {"phrase": phrase, "unit": unit, "matched_text": match.group(0)}
-
-
-def extract_relative_period_with_gemini(text: str, fuzzy_date: dict[str, str]) -> dict[str, Any] | None:
-    prompt = f"""
-Extract only the relative date number from this Indonesian phrase.
-Return JSON only.
-
-Text: {text}
-Phrase: {fuzzy_date['matched_text']}
-
-Rules:
-- Interpret typo-heavy Indonesian number words if possible.
-- Return null if unsure.
-- number must be integer.
-- unit must be one of: hari, minggu, bulan.
-
-JSON shape:
-{{"number": 30, "unit": "hari", "confidence": 0.8}}
-""".strip()
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0,
-            "responseMimeType": "application/json",
-        },
-    }
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        + GEMINI_MODEL
-        + ":generateContent?key="
-        + GEMINI_API_KEY
-    )
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=GEMINI_TIMEOUT_SECONDS) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        parsed = json.loads(strip_json_fence(extract_gemini_text(data)))
-    except Exception:
-        return None
-
-    if not isinstance(parsed, dict):
-        return None
-    number = parsed.get("number")
-    unit = parsed.get("unit")
-    confidence = float(parsed.get("confidence") or 0)
-    if number in ("", None) or unit not in {"hari", "minggu", "bulan"} or confidence < 0.60:
-        return None
-    number = int(number)
-    if number < 1 or number > 365:
-        return None
-    return {"number": number, "unit": unit, "confidence": confidence}
-
-
-def replace_fuzzy_relative_period(text: str, fuzzy_date: dict[str, str], extracted: dict[str, Any]) -> str:
-    replacement = f"{extracted['number']} {extracted['unit']} lalu"
-    return text.replace(fuzzy_date["matched_text"], replacement, 1)
-
-
 def is_simple_transaction_text(text: str) -> bool:
     lowered = text.lower()
     if len(text) > 80:
@@ -1032,7 +889,8 @@ def levenshtein(left: str, right: str) -> int:
     return previous[-1]
 
 
-def parse_with_rules(text: str) -> dict[str, Any]:
+def parse_with_offline_fallback(text: str) -> dict[str, Any]:
+    """Best-effort parser for local development when Gemini is unavailable."""
     lowered = text.lower()
     transaction_date = datetime.now().date().isoformat()
     query = infer_query(lowered)
