@@ -25,10 +25,26 @@ func NewClient(baseURL string, timeout time.Duration) Client {
 }
 
 type ParseTextRequest struct {
-	Source    string `json:"source"`
-	From      string `json:"from,omitempty"`
-	MessageID string `json:"message_id,omitempty"`
-	Text      string `json:"text"`
+	Source       string               `json:"source"`
+	From         string               `json:"from,omitempty"`
+	MessageID    string               `json:"message_id,omitempty"`
+	Text         string               `json:"text"`
+	Conversation *ConversationContext `json:"conversation,omitempty"`
+}
+
+type ConversationContext struct {
+	HasPendingDraft bool                 `json:"has_pending_draft"`
+	DraftSummary    []DraftSummaryItem   `json:"draft_summary,omitempty"`
+	LastBotPrompt   string               `json:"last_bot_prompt,omitempty"`
+	State           string               `json:"state,omitempty"`
+}
+
+type DraftSummaryItem struct {
+	Index       int    `json:"index"`
+	Type        string `json:"type"`
+	Amount      int64  `json:"amount"`
+	Description string `json:"description"`
+	Category    string `json:"category"`
 }
 
 type ParseTextResponse struct {
@@ -47,9 +63,19 @@ type ParseTextResponse struct {
 	TransactionDate     string             `json:"transaction_date"`
 	Transactions        []TransactionDraft `json:"transactions"`
 	Query               *QueryDraft        `json:"query,omitempty"`
+	Edit                *EditDraft         `json:"edit,omitempty"`
 	Confidence          float64            `json:"confidence"`
 	MissingFields       []string           `json:"missing_fields"`
 	Raw                 map[string]any     `json:"raw,omitempty"`
+}
+
+type EditDraft struct {
+	TargetItemIndex *int    `json:"target_item_index,omitempty"`
+	Field           string  `json:"field"`
+	Value           any     `json:"value,omitempty"`
+	Amount          *int64  `json:"amount,omitempty"`
+	CategoryHint    string  `json:"category_hint,omitempty"`
+	Description     string  `json:"description,omitempty"`
 }
 
 type IntentCandidate struct {

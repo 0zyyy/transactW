@@ -226,6 +226,24 @@ func (s *Store) Save(conversationKey string, parsed inference.ParseTextResponse)
 	return conversation.PendingDraft{ConversationKey: conversationKey, Parsed: parsed, CreatedAt: now, ExpiresAt: expiresAt}, nil
 }
 
+func (s *Store) Get(conversationKey string) (conversation.PendingDraft, bool, error) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return conversation.PendingDraft{}, false, err
+	}
+	defer rollbackUnlessDone(tx)
+	draft, _, _, ok, err := loadPendingDraft(ctx, tx, conversationKey, now)
+	if err != nil || !ok {
+		return draft, ok, err
+	}
+	if err := tx.Commit(); err != nil {
+		return conversation.PendingDraft{}, false, err
+	}
+	return draft, true, nil
+}
+
 func (s *Store) Confirm(conversationKey string) (conversation.PendingDraft, bool, error) {
 	ctx := context.Background()
 	now := time.Now().UTC()

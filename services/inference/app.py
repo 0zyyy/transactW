@@ -100,7 +100,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.write_json(400, {"error": "text is required"})
                 return
 
-            parsed = route_parse(text)
+            parsed = route_parse(text, request.get("conversation"))
 
             self.write_json(200, parsed)
         except Exception as exc:
@@ -125,8 +125,8 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
-def parse_with_gemini(text: str) -> dict[str, Any]:
-    prompt = build_prompt(text)
+def parse_with_gemini(text: str, conversation: Any = None) -> dict[str, Any]:
+    prompt = build_prompt(text, conversation)
     schema = {
         "type": "object",
         "properties": {
@@ -175,6 +175,17 @@ def parse_with_gemini(text: str) -> dict[str, Any]:
                     },
                 },
                 "required": ["metric", "type", "date_range", "needs_clarification", "clarification_prompt"],
+            },
+            "edit": {
+                "type": "object",
+                "properties": {
+                    "target_item_index": {"type": "integer"},
+                    "field": {"type": "string"},
+                    "value": {"type": "string"},
+                    "amount": {"type": "integer"},
+                    "category_hint": {"type": "string"},
+                    "description": {"type": "string"},
+                },
             },
             "transactions": {
                 "type": "array",
@@ -256,8 +267,9 @@ def parse_with_gemini(text: str) -> dict[str, Any]:
     return normalize_parse(parsed)
 
 
-def build_prompt(text: str) -> str:
+def build_prompt(text: str, conversation: Any = None) -> str:
     today = datetime.now().date().isoformat()
+    context_json = json.dumps(safe_conversation_context(conversation), ensure_ascii=False)
     return f"""
 You are the conversational interpreter for an Indonesian WhatsApp finance bot.
 Interpret the user's message and return one safe structured action.
@@ -280,6 +292,8 @@ Rules:
 - Use create_draft for new expense/income/transfer drafts. Do not save anything.
 - Use run_query for spending/income/history questions. Do not invent query results.
 - Use edit_draft for corrections to an existing pending draft.
+- For edit_draft, include edit with target_item_index when the user points to an item like "yang kedua".
+- Only use edit_draft if conversation.has_pending_draft is true; otherwise ask clarification.
 - Use confirm_draft only when the user clearly confirms a pending draft.
 - Use cancel_flow only when the user clearly cancels.
 - needs_confirmation is true for create_draft and edit_draft actions.
@@ -314,7 +328,24 @@ Rules:
 
 Message:
 {text}
+
+Conversation context:
+{context_json}
 """.strip()
+
+
+def safe_conversation_context(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {"has_pending_draft": False, "state": "idle"}
+    draft_summary = value.get("draft_summary")
+    if not isinstance(draft_summary, list):
+        draft_summary = []
+    return {
+        "has_pending_draft": bool(value.get("has_pending_draft")),
+        "state": str(value.get("state") or ""),
+        "last_bot_prompt": str(value.get("last_bot_prompt") or ""),
+        "draft_summary": draft_summary[:10],
+    }
 
 
 def extract_gemini_text(data: dict[str, Any]) -> str:
@@ -337,7 +368,7 @@ def strip_json_fence(value: str) -> str:
     return stripped
 
 
-def route_parse(text: str) -> dict[str, Any]:
+def route_parse(text: str, conversation: Any = None) -> dict[str, Any]:
     normalized_text = normalize_chat_typos(text)
     shortcut = parse_short_command(normalized_text)
     if shortcut is not None:
@@ -353,7 +384,7 @@ def route_parse(text: str) -> dict[str, Any]:
 
     if GEMINI_API_KEY:
         try:
-            gemini = parse_with_gemini(normalized_text)
+            gemini = parse_with_gemini(normalized_text, conversation)
             gemini["raw"] = {
                 "provider": "gemini",
                 "model": GEMINI_MODEL,
@@ -1385,6 +1416,7 @@ def normalize_parse(parsed: dict[str, Any]) -> dict[str, Any]:
         "transaction_date": str(parsed.get("transaction_date") or datetime.now().date().isoformat()),
         "transactions": normalize_transactions(parsed),
         "query": query,
+        "edit": normalize_edit(parsed),
         "confidence": float(parsed.get("confidence") or 0),
         "missing_fields": [str(item) for item in missing_fields],
     }
@@ -1481,6 +1513,66 @@ def normalize_transactions(parsed: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return normalized
+
+
+def normalize_edit(parsed: dict[str, Any]) -> dict[str, Any] | None:
+    if str(parsed.get("intent") or "") != "edit_draft" and str(parsed.get("action") or "") != "edit_draft":
+        return None
+    edit = parsed.get("edit")
+    if not isinstance(edit, dict):
+        edit = {}
+    normalized: dict[str, Any] = {
+        "field": str(edit.get("field") or inferred_edit_field(parsed)),
+        "value": edit.get("value") if edit.get("value") is not None else "",
+        "category_hint": normalize_category(edit.get("category_hint")),
+        "description": str(edit.get("description") or ""),
+    }
+    target = edit.get("target_item_index")
+    if target in (None, ""):
+        target = inferred_edit_target(parsed)
+    if target not in (None, ""):
+        try:
+            normalized["target_item_index"] = int(target)
+        except (TypeError, ValueError):
+            pass
+    amount = edit.get("amount") if edit.get("amount") not in (None, "") else parsed.get("amount")
+    if amount not in (None, ""):
+        try:
+            normalized["amount"] = int(amount)
+        except (TypeError, ValueError):
+            pass
+    if normalized["field"] == "category" and not normalized["category_hint"]:
+        normalized["category_hint"] = normalize_category(parsed.get("category_hint"))
+    return normalized
+
+
+def inferred_edit_field(parsed: dict[str, Any]) -> str:
+    if parsed.get("amount") not in (None, ""):
+        return "amount"
+    if normalize_category(parsed.get("category_hint")):
+        return "category"
+    description = str(parsed.get("description") or "").lower()
+    if any(word in description for word in ["hapus", "delete", "remove"]):
+        return "delete_item"
+    return "unknown"
+
+
+def inferred_edit_target(parsed: dict[str, Any]) -> int | None:
+    source = str(parsed.get("_source_text") or parsed.get("description") or "").lower()
+    ordinals = {
+        "pertama": 1,
+        "kedua": 2,
+        "ketiga": 3,
+        "keempat": 4,
+        "kelima": 5,
+    }
+    for word, index in ordinals.items():
+        if re.search(rf"\b(?:yang\s+)?{word}\b", source):
+            return index
+    match = re.search(r"\b(?:item|nomor|no)\s*(\d{1,2})\b", source)
+    if match:
+        return int(match.group(1))
+    return None
 
 
 def normalize_query(parsed: dict[str, Any]) -> dict[str, Any] | None:

@@ -16,6 +16,7 @@ type PendingDraft struct {
 
 type DraftStore interface {
 	Save(conversationKey string, parsed inference.ParseTextResponse) (PendingDraft, error)
+	Get(conversationKey string) (PendingDraft, bool, error)
 	Confirm(conversationKey string) (PendingDraft, bool, error)
 	Cancel(conversationKey string) (bool, error)
 }

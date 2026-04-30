@@ -158,11 +158,17 @@ func (g gateway) handleMessage(evt *events.Message) {
 		return
 	}
 
+	conversationContext, err := inferenceContext(g.store, conversationKey)
+	if err != nil {
+		g.logger.Error("failed to load conversation context", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
+	}
+
 	parsed, err := g.inference.ParseText(ctx, inference.ParseTextRequest{
-		Source:    "whatsmeow",
-		From:      senderID,
-		MessageID: evt.Info.ID,
-		Text:      parseText,
+		Source:       "whatsmeow",
+		From:         senderID,
+		MessageID:    evt.Info.ID,
+		Text:         parseText,
+		Conversation: conversationContext,
 	})
 	if err != nil {
 		g.logger.Error("failed to parse whatsmeow message", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
@@ -212,6 +218,60 @@ func (g gateway) handleMessage(evt *events.Message) {
 		"conversation_key", conversationKey,
 		"saved_draft", flowResult.SaveDraft,
 	)
+}
+
+func inferenceContext(store conversation.DraftStore, conversationKey string) (*inference.ConversationContext, error) {
+	draft, ok, err := store.Get(conversationKey)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return &inference.ConversationContext{HasPendingDraft: false, State: "idle"}, nil
+	}
+	return &inference.ConversationContext{
+		HasPendingDraft: true,
+		State:           "pending_confirmation",
+		DraftSummary:    draftSummary(draft.Parsed),
+		LastBotPrompt:   "Balas simpan/batal atau kirim koreksi.",
+	}, nil
+}
+
+func draftSummary(parsed inference.ParseTextResponse) []inference.DraftSummaryItem {
+	if len(parsed.Transactions) > 0 {
+		items := make([]inference.DraftSummaryItem, 0, len(parsed.Transactions))
+		for index, tx := range parsed.Transactions {
+			items = append(items, inference.DraftSummaryItem{
+				Index:       index + 1,
+				Type:        tx.Type,
+				Amount:      tx.Amount,
+				Description: tx.Description,
+				Category:    tx.CategoryHint,
+			})
+		}
+		return items
+	}
+	amount := int64(0)
+	if parsed.Amount != nil {
+		amount = *parsed.Amount
+	}
+	return []inference.DraftSummaryItem{{
+		Index:       1,
+		Type:        draftType(parsed.Intent),
+		Amount:      amount,
+		Description: parsed.Description,
+		Category:    parsed.CategoryHint,
+	}}
+}
+
+func draftType(intent string) string {
+	switch intent {
+	case "create_income":
+		return "income"
+	case "create_multiple_transactions":
+		return "multiple"
+	default:
+		return "expense"
+	}
 }
 
 func extractText(evt *events.Message) string {

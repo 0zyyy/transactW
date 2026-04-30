@@ -82,6 +82,13 @@ def check_case(case: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
         assert_equal("category_hint", parsed.get("category_hint"), expect["category_hint"])
     if "transaction_count" in expect:
         assert_equal("transaction_count", len(parsed.get("transactions") or []), expect["transaction_count"])
+    edit = parsed.get("edit") or {}
+    if "edit_field" in expect:
+        assert_equal("edit.field", edit.get("field"), expect["edit_field"])
+    if "edit_target_item_index" in expect:
+        assert_equal("edit.target_item_index", edit.get("target_item_index"), expect["edit_target_item_index"])
+    if "edit_amount" in expect:
+        assert_equal("edit.amount", edit.get("amount"), expect["edit_amount"])
 
     raw = parsed.get("raw") or {}
     if "gemini_called" in expect:
@@ -253,6 +260,31 @@ def validation_cases() -> list[dict[str, Any]]:
             "expect": {
                 "intent": "edit_draft",
                 "action": "edit_draft",
+            },
+        },
+        {
+            "name": "validator infers second item amount edit",
+            "input": "yang kedua harusnya 90k",
+            "parsed": {
+                "intent": "edit_draft",
+                "action": "edit_draft",
+                "amount": 90000,
+                "currency": "IDR",
+                "description": "",
+                "category_hint": "",
+                "account_hint": "",
+                "transaction_date": "2026-04-27",
+                "transactions": [],
+                "confidence": 0.9,
+                "missing_fields": [],
+                "_source_text": "yang kedua harusnya 90k",
+            },
+            "expect": {
+                "intent": "edit_draft",
+                "action": "edit_draft",
+                "edit_field": "amount",
+                "edit_target_item_index": 2,
+                "edit_amount": 90000,
             },
         },
         {
