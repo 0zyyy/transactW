@@ -304,6 +304,10 @@ Rules:
 - Query metric is expense_total for "habis brp/pengeluaran berapa" and transaction_list for "beli apa aja/transaksi apa aja".
 - Query type is expense unless the user clearly asks income or all transactions.
 - Date ranges must be exact YYYY-MM-DD dates based on today {today} and timezone Asia/Jakarta.
+- Interpret dates conversationally, but do not force a date when the message is an edit/correction.
+- "tahun kmrn", "tahun kemarin", and "tahun lalu" refer to the previous calendar year.
+- Month spans and quarter phrases must cover the full requested range.
+- If unsure about a date range, set needs_clarification true instead of guessing.
 - If date wording is ambiguous, still include the best date_range and reduce date_range.confidence.
 - Go owns state, persistence, query execution, and final replies. You only interpret the message.
 - Do not claim anything was saved or queried successfully.
@@ -625,7 +629,7 @@ def unknown_month_date_clarification(text: str) -> dict[str, Any]:
 
 def detect_unknown_month_date_phrase(text: str) -> str | None:
     lowered = text.lower()
-    if not any(word in lowered for word in ["abis", "habis", "pengeluaran", "pemasukan", "transaksi", "berapa", "brp", "brapa"]):
+    if not any(word in lowered for word in ["abis", "habis", "pengeluaran", "pemasukan", "transaksi", "berapa", "brp", "brapa", "total", "totalnya"]):
         return None
 
     known_months = set(indonesian_months())
@@ -643,100 +647,6 @@ def detect_unknown_month_date_phrase(text: str) -> str | None:
         if min_distance(token, full_months) <= 2:
             return phrase
     return None
-
-
-def extract_date_range_with_gemini(text: str) -> dict[str, Any] | None:
-    today = datetime.now().date().isoformat()
-    prompt = f"""
-Extract only the intended date range from this Indonesian finance query.
-Return JSON only.
-
-Today: {today}
-Text: {text}
-
-Rules:
-- Interpret typo-heavy month names if possible.
-- "tahun kemarin", "tahun kmrn", and "tahun lalu" mean previous calendar year.
-- Return null if unsure.
-- start_date and end_date must use YYYY-MM-DD.
-- confidence must be 0 to 1.
-
-JSON shape:
-{{"raw_text":"...","preset":"gemini_date_range","start_date":"2025-02-01","end_date":"2025-02-28","confidence":0.8}}
-""".strip()
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0,
-            "responseMimeType": "application/json",
-        },
-    }
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        + GEMINI_MODEL
-        + ":generateContent?key="
-        + GEMINI_API_KEY
-    )
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=GEMINI_TIMEOUT_SECONDS) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        parsed = json.loads(strip_json_fence(extract_gemini_text(data)))
-    except Exception:
-        return None
-    return normalized_external_date_range(parsed)
-
-
-def query_from_extracted_date_range(original_text: str, normalized_text: str, date_range_value: dict[str, Any], reason: str) -> dict[str, Any]:
-    metric, tx_type = query_metric_and_type(normalized_text)
-    needs_clarification = date_range_value["confidence"] < 0.60
-    parsed = {
-        "intent": "query_recent_transactions" if metric == "transaction_list" else "query_summary",
-        "action": "ask_clarification" if needs_clarification else "run_query",
-        "reply_draft": query_clarification_prompt(date_range_value) if needs_clarification else "Aku cek datanya dulu ya.",
-        "needs_confirmation": False,
-        "needs_clarification": needs_clarification,
-        "clarification_prompt": query_clarification_prompt(date_range_value) if needs_clarification else "",
-        "intent_candidates": [
-            {
-                "intent": "query_recent_transactions" if metric == "transaction_list" else "query_summary",
-                "score": min(0.88, float(date_range_value["confidence"])),
-                "reason": "Gemini extracted date range for unknown month wording",
-                "needs_reply": needs_clarification,
-            }
-        ],
-        "amount": None,
-        "currency": "IDR",
-        "description": normalized_text,
-        "category_hint": "",
-        "account_hint": "",
-        "transaction_date": datetime.now().date().isoformat(),
-        "transactions": [],
-        "query": {
-            "metric": metric,
-            "type": tx_type,
-            "date_range": date_range_value,
-            "needs_clarification": needs_clarification,
-            "clarification_prompt": query_clarification_prompt(date_range_value) if needs_clarification else "",
-        },
-        "confidence": min(0.88, float(date_range_value["confidence"])),
-        "missing_fields": [],
-        "raw": {
-            "provider": "gemini_date_extraction",
-            "model": GEMINI_MODEL,
-            "gemini_called": True,
-            "fallback_reason": reason,
-            "original_text": original_text,
-            "normalized_text": normalized_text,
-            "parser_version": PARSER_VERSION,
-        },
-    }
-    return parsed
 
 
 def is_simple_transaction_text(text: str) -> bool:
@@ -1430,7 +1340,8 @@ def cleanup_description(text: str, amount: int | None) -> str:
 
 
 def normalize_parse(parsed: dict[str, Any]) -> dict[str, Any]:
-    intent = str(parsed.get("intent") or "unknown")
+    source_text = str(parsed.get("_source_text") or parsed.get("description") or "")
+    intent = normalize_intent_from_source(str(parsed.get("intent") or "unknown"), source_text)
     amount = parsed.get("amount")
     if amount in ("", None):
         amount = None
@@ -1440,6 +1351,7 @@ def normalize_parse(parsed: dict[str, Any]) -> dict[str, Any]:
     missing_fields = parsed.get("missing_fields")
     if not isinstance(missing_fields, list):
         missing_fields = []
+    missing_fields = normalize_missing_fields(missing_fields, parsed)
 
     query = normalize_query(parsed)
     needs_clarification = bool(parsed.get("needs_clarification"))
@@ -1450,6 +1362,11 @@ def normalize_parse(parsed: dict[str, Any]) -> dict[str, Any]:
     action = normalize_action(parsed.get("action"), intent, needs_clarification)
     needs_confirmation = bool(parsed.get("needs_confirmation"))
     if action in {"create_draft", "edit_draft"}:
+        needs_confirmation = True
+    if intent in {"create_expense", "create_income", "create_multiple_transactions"} and amount is not None and not missing_fields:
+        needs_clarification = False
+        clarification_prompt = ""
+        action = "create_draft"
         needs_confirmation = True
 
     return {
@@ -1473,9 +1390,27 @@ def normalize_parse(parsed: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def normalize_intent_from_source(intent: str, source_text: str) -> str:
+    lowered = source_text.lower()
+    if intent == "unknown" and re.search(r"\b(?:hapus|delete|remove)\b", lowered):
+        return "edit_draft"
+    return intent
+
+
+def normalize_missing_fields(missing_fields: list[Any], parsed: dict[str, Any]) -> list[str]:
+    normalized = [str(item) for item in missing_fields]
+    if parsed.get("transaction_date"):
+        normalized = [item for item in normalized if item != "transaction_date"]
+    if parsed.get("amount") not in (None, ""):
+        normalized = [item for item in normalized if item != "amount"]
+    return normalized
+
+
 def normalize_action(value: Any, intent: str, needs_clarification: bool) -> str:
     allowed = {"create_draft", "run_query", "edit_draft", "confirm_draft", "cancel_flow", "show_help", "ask_clarification", "none"}
     action = str(value or "")
+    if action == "none" and intent == "edit_draft":
+        return "edit_draft"
     if action in allowed:
         return "ask_clarification" if needs_clarification else action
     if needs_clarification:
@@ -1551,9 +1486,9 @@ def normalize_transactions(parsed: dict[str, Any]) -> list[dict[str, Any]]:
 def normalize_query(parsed: dict[str, Any]) -> dict[str, Any] | None:
     query = parsed.get("query")
     intent = str(parsed.get("intent") or "")
+    if not intent.startswith("query_"):
+        return None
     if not isinstance(query, dict):
-        if not intent.startswith("query_"):
-            return None
         query = {}
 
     raw_candidates = [
@@ -1569,6 +1504,7 @@ def normalize_query(parsed: dict[str, Any]) -> dict[str, Any] | None:
         date_range_value = gemini_date_range
 
     source_text = " ".join(raw_candidates).lower()
+    date_range_value = validate_query_date_against_source(source_text, date_range_value)
     tx_type = str(query.get("type") or "")
     if not tx_type:
         tx_type = "income" if any(word in source_text for word in ["income", "pemasukan", "gaji", "masuk"]) else "expense"
@@ -1589,6 +1525,60 @@ def normalize_query(parsed: dict[str, Any]) -> dict[str, Any] | None:
         "needs_clarification": needs_clarification,
         "clarification_prompt": query_clarification_prompt(date_range_value) if needs_clarification else "",
     }
+
+
+def validate_query_date_against_source(source_text: str, date_range_value: dict[str, Any]) -> dict[str, Any]:
+    if not detect_unknown_month_date_phrase(source_text):
+        invalid_range = looks_like_invalid_month_span(source_text, date_range_value) or looks_like_invalid_quarter(source_text, date_range_value)
+        if not invalid_range:
+            return date_range_value
+        today = datetime.now().date()
+        return date_range("", "ambiguous_date_range", today, today, 0.35)
+    if not re.search(r"\btahun\s+(?:kmrn|kemarin|lalu)\b", source_text):
+        return date_range_value
+    try:
+        start = datetime.strptime(str(date_range_value.get("start_date")), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        start = None
+    previous_year = datetime.now().date().year - 1
+    if start is not None and start.year == previous_year:
+        return date_range_value
+    today = datetime.now().date()
+    return date_range("", "unknown_month_date", today, today, 0.35)
+
+
+def looks_like_invalid_month_span(source_text: str, date_range_value: dict[str, Any]) -> bool:
+    months = indonesian_months()
+    month_names = sorted(months, key=len, reverse=True)
+    pattern = r"\b(" + "|".join(re.escape(name) for name in month_names) + r")\b\s*(?:sampai|sampe|hingga|ke|-)\s*\b(" + "|".join(re.escape(name) for name in month_names) + r")\b"
+    match = re.search(pattern, source_text)
+    if not match:
+        return False
+    start_month = months[match.group(1)]
+    end_month = months[match.group(2)]
+    if start_month == end_month:
+        return False
+    try:
+        start = datetime.strptime(str(date_range_value.get("start_date")), "%Y-%m-%d").date()
+        end = datetime.strptime(str(date_range_value.get("end_date")), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return True
+    return start.month != start_month or end.month != end_month
+
+
+def looks_like_invalid_quarter(source_text: str, date_range_value: dict[str, Any]) -> bool:
+    match = re.search(r"\b(?:q|quarter\s*)([1-4])\b", source_text)
+    if not match:
+        return False
+    quarter = int(match.group(1))
+    expected_start_month = ((quarter - 1) * 3) + 1
+    expected_end_month = expected_start_month + 2
+    try:
+        start = datetime.strptime(str(date_range_value.get("start_date")), "%Y-%m-%d").date()
+        end = datetime.strptime(str(date_range_value.get("end_date")), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return True
+    return start.month != expected_start_month or end.month != expected_end_month
 
 
 def default_query_date_range() -> dict[str, Any]:

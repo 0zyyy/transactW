@@ -45,6 +45,12 @@ def main() -> int:
         if errors:
             failures.append(format_failure(case, parsed, errors))
 
+    for case in validation_cases():
+        parsed = parser.normalize_parse(case["parsed"])
+        errors = check_case(case, parsed)
+        if errors:
+            failures.append(format_failure(case, parsed, errors))
+
     if failures:
         print("\n\n".join(failures))
         print(f"\nFAILED: {len(failures)} / {len(cases)} parser cases failed")
@@ -157,6 +163,155 @@ def check_case(case: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
         assert_equal("query.date_range.end_date", date_range.get("end_date"), expect["date_end_iso"])
 
     return errors
+
+
+def validation_cases() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "validator rejects collapsed month span",
+            "input": "juni sampai juli totalnya?",
+            "parsed": gemini_query_stub("juni sampai juli totalnya?", "2026-06-01", "2026-06-30"),
+            "expect": {
+                "intent": "query_summary",
+                "action": "ask_clarification",
+                "top_needs_clarification": True,
+                "date_preset": "ambiguous_date_range",
+            },
+        },
+        {
+            "name": "validator rejects broad q1 range",
+            "input": "q1 tahun ini totalnya",
+            "parsed": gemini_query_stub("q1 tahun ini totalnya", "2026-01-01", "2026-04-30"),
+            "expect": {
+                "intent": "query_summary",
+                "action": "ask_clarification",
+                "top_needs_clarification": True,
+                "date_preset": "ambiguous_date_range",
+            },
+        },
+        {
+            "name": "validator drops query on edit draft",
+            "input": "ganti kategori transport",
+            "parsed": {
+                "intent": "edit_draft",
+                "action": "edit_draft",
+                "currency": "IDR",
+                "description": "ganti kategori transport",
+                "category_hint": "Transport",
+                "account_hint": "",
+                "transaction_date": "2026-04-27",
+                "transactions": [],
+                "query": {
+                    "metric": "expense_total",
+                    "type": "expense",
+                    "date_range": {
+                        "raw_text": "",
+                        "preset": "today_default",
+                        "start_date": "2026-04-27",
+                        "end_date": "2026-04-27",
+                        "confidence": 0.35,
+                    },
+                    "needs_clarification": True,
+                    "clarification_prompt": "bad query pollution",
+                },
+                "confidence": 0.9,
+                "missing_fields": [],
+            },
+            "expect": {
+                "intent": "edit_draft",
+                "action": "edit_draft",
+                "top_needs_clarification": False,
+            },
+        },
+        {
+            "name": "validator rejects typo month with totalnya",
+            "input": "fbruari tahun kmrn totalnya",
+            "parsed": gemini_query_stub("fbruari tahun kmrn totalnya", "2026-04-29", "2026-04-29"),
+            "expect": {
+                "intent": "query_summary",
+                "action": "ask_clarification",
+                "top_needs_clarification": True,
+                "date_preset": "unknown_month_date",
+            },
+        },
+        {
+            "name": "validator upgrades delete wording to edit draft",
+            "input": "hapus yang pertama",
+            "parsed": {
+                "intent": "unknown",
+                "action": "none",
+                "currency": "IDR",
+                "description": "hapus yang pertama",
+                "category_hint": "",
+                "account_hint": "",
+                "transaction_date": "2026-04-27",
+                "transactions": [],
+                "confidence": 0,
+                "missing_fields": [],
+                "_source_text": "hapus yang pertama",
+            },
+            "expect": {
+                "intent": "edit_draft",
+                "action": "edit_draft",
+            },
+        },
+        {
+            "name": "validator clears create income clarification with amount",
+            "input": "income 2jt freelance",
+            "parsed": {
+                "intent": "create_income",
+                "action": "ask_clarification",
+                "needs_clarification": True,
+                "clarification_prompt": "unneeded",
+                "amount": 2000000,
+                "currency": "IDR",
+                "description": "freelance",
+                "category_hint": "Income",
+                "account_hint": "",
+                "transaction_date": "2026-04-27",
+                "transactions": [],
+                "confidence": 0.8,
+                "missing_fields": [],
+                "_source_text": "income 2jt freelance",
+            },
+            "expect": {
+                "intent": "create_income",
+                "action": "create_draft",
+                "top_needs_clarification": False,
+                "needs_confirmation": True,
+                "amount": 2000000,
+            },
+        },
+    ]
+
+
+def gemini_query_stub(source_text: str, start_date: str, end_date: str) -> dict[str, Any]:
+    return {
+        "intent": "query_summary",
+        "action": "run_query",
+        "currency": "IDR",
+        "description": source_text,
+        "category_hint": "",
+        "account_hint": "",
+        "transaction_date": "2026-04-27",
+        "transactions": [],
+        "query": {
+            "metric": "expense_total",
+            "type": "expense",
+            "date_range": {
+                "raw_text": source_text,
+                "preset": "gemini_date_range",
+                "start_date": start_date,
+                "end_date": end_date,
+                "confidence": 0.9,
+            },
+            "needs_clarification": False,
+            "clarification_prompt": "",
+        },
+        "confidence": 0.9,
+        "missing_fields": [],
+        "_source_text": source_text,
+    }
 
 
 def today():
