@@ -1,0 +1,496 @@
+[
+  {
+    "name": "confirm exact",
+    "input": "simpan",
+    "expect": {
+      "intent": "confirm_draft",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "cancel shorthand",
+    "input": "gx",
+    "expect": {
+      "intent": "cancel_flow",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "today summary",
+    "input": "hari ini abis berapa?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "today",
+      "needs_clarification": false,
+      "date_start_iso": "2026-04-27",
+      "date_end_iso": "2026-04-27",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "yesterday summary",
+    "input": "kmrn habis brp ya?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "yesterday",
+      "needs_clarification": false,
+      "date_offset_start_days": -1,
+      "date_offset_end_days": -1,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "day before yesterday summary",
+    "input": "kmrnnya lagi habis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "day_before_yesterday",
+      "needs_clarification": false,
+      "date_offset_start_days": -2,
+      "date_offset_end_days": -2,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "days ago word typo summary",
+    "input": "tga hri lalu abs brpa",
+    "expect": {
+      "intent": "query_summary",
+      "normalized_text": "tiga hari lalu abis brapa",
+      "metric": "expense_total",
+      "date_preset": "days_ago",
+      "needs_clarification": false,
+      "date_offset_start_days": -3,
+      "date_offset_end_days": -3,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "compound days ago summary",
+    "input": "dua puluh hari lalu abis brapa",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "days_ago",
+      "needs_clarification": false,
+      "date_offset_start_days": -20,
+      "date_offset_end_days": -20,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "fuzzy compound days ago without gemini clarifies",
+    "input": "duwa puluh hari lalu abis brsapa",
+    "expect": {
+      "intent": "query_summary",
+      "normalized_text": "duwa puluh hari lalu abis brsapa",
+      "date_preset": "today_default",
+      "needs_clarification": true,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "weekday previous summary",
+    "input": "Sabtu kmrn abis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "previous_weekday",
+      "needs_clarification": false,
+      "date_weekday": 5,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "this week typo summary",
+    "input": "mingu ini abis brpa",
+    "expect": {
+      "intent": "query_summary",
+      "normalized_text": "minggu ini abis brapa",
+      "metric": "expense_total",
+      "date_preset": "this_week",
+      "needs_clarification": false,
+      "date_start_weekday": 0,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "last week summary",
+    "input": "minggu lalu abis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "last_week",
+      "needs_clarification": false,
+      "date_start_iso": "2026-04-20",
+      "date_end_iso": "2026-04-26",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "one week ago summary",
+    "input": "1 minggu lalu abis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "weeks_ago",
+      "needs_clarification": false,
+      "date_start_iso": "2026-04-20",
+      "date_end_iso": "2026-04-26",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "this month summary",
+    "input": "bulan ini abis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "this_month",
+      "needs_clarification": false,
+      "date_start_day": 1,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "last month summary",
+    "input": "bulan lalu pengeluaran berapa?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "last_month",
+      "needs_clarification": false,
+      "date_start_iso": "2026-03-01",
+      "date_end_iso": "2026-03-31",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "two months ago summary",
+    "input": "2 bulan lalu habis berapa?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "months_ago",
+      "needs_clarification": false,
+      "date_start_iso": "2026-02-01",
+      "date_end_iso": "2026-02-28",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "last three days rolling summary",
+    "input": "3 hari terakhir abis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "last_n_days",
+      "needs_clarification": false,
+      "date_offset_start_days": -3,
+      "date_end_today": true,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "last two weeks rolling summary",
+    "input": "2 minggu terakhir pengeluaran berapa?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "last_n_weeks",
+      "needs_clarification": false,
+      "date_offset_start_days": -14,
+      "date_end_today": true,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "last three months rolling summary",
+    "input": "3 bulan terakhir habis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "last_n_months",
+      "needs_clarification": false,
+      "date_offset_start_months": -3,
+      "date_end_today": true,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "this year summary",
+    "input": "tahun ini pengeluaran berapa?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "this_year",
+      "needs_clarification": false,
+      "date_start_month": 1,
+      "date_start_day": 1,
+      "date_start_year_offset": 0,
+      "date_end_today": true,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "last year summary",
+    "input": "tahun lalu pengeluaran berapa?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "last_year",
+      "needs_clarification": false,
+      "date_start_month": 1,
+      "date_start_day": 1,
+      "date_start_year_offset": -1,
+      "date_end_month": 12,
+      "date_end_year_offset": -1,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "named month summary",
+    "input": "bulan januari habis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "named_month",
+      "needs_clarification": false,
+      "date_start_month": 1,
+      "date_start_day": 1,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "named month without bulan summary",
+    "input": "juni brapa totalnya?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "named_month",
+      "needs_clarification": false,
+      "date_start_iso": "2026-06-01",
+      "date_end_iso": "2026-06-30",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "future named month resolves previous year",
+    "input": "bulan desember habis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "named_month",
+      "needs_clarification": false,
+      "date_start_iso": "2025-12-01",
+      "date_end_iso": "2025-12-31",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "named month previous year explicit",
+    "input": "bulan desember tahun kemarin abis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "named_month",
+      "needs_clarification": false,
+      "date_start_iso": "2025-12-01",
+      "date_end_iso": "2025-12-31",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "past named month previous year explicit",
+    "input": "bulan januari tahun kemarin abis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "named_month",
+      "needs_clarification": false,
+      "date_start_iso": "2025-01-01",
+      "date_end_iso": "2025-01-31",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "typo month previous year clarifies without gemini",
+    "input": "fbruari tahun kmrn abis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "normalized_text": "fbruari tahun kmrn abis brp?",
+      "metric": "expense_total",
+      "date_preset": "unknown_month_date",
+      "needs_clarification": true,
+      "date_start_iso": "2026-04-27",
+      "date_end_iso": "2026-04-27",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "vague month shorthand clarifies without gemini",
+    "input": "jni tahun kmrn abis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "unknown_month_date",
+      "needs_clarification": true,
+      "date_start_iso": "2026-04-27",
+      "date_end_iso": "2026-04-27",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "misspelled month clarifies without gemini",
+    "input": "bulan dsmber tahun kmrn abis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "unknown_month_date",
+      "needs_clarification": true,
+      "date_start_iso": "2026-04-27",
+      "date_end_iso": "2026-04-27",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "explicit date range summary",
+    "input": "dari tanggal 1 April sampai 5 April pengeluaran berapa?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "explicit_date_range",
+      "needs_clarification": false,
+      "date_start_month": 4,
+      "date_start_day": 1,
+      "date_end_month": 4,
+      "date_end_day": 5,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "explicit date range without month summary",
+    "input": "dari tanggal 1 sampai 15 abis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "explicit_date_range",
+      "needs_clarification": false,
+      "date_start_iso": "2026-04-01",
+      "date_end_iso": "2026-04-15",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "explicit invalid future range clarifies",
+    "input": "dari tanggal 28 sampai 30 abis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "today_default",
+      "needs_clarification": true,
+      "date_start_iso": "2026-04-27",
+      "date_end_iso": "2026-04-27",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "three months ago list query",
+    "input": "3 bulan lalu habis buat apa aja?",
+    "expect": {
+      "intent": "query_recent_transactions",
+      "metric": "transaction_list",
+      "date_preset": "months_ago",
+      "date_month_offset": -3,
+      "date_start_day": 1,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "this week transaction list query",
+    "input": "transaksi minggu ini apa aja?",
+    "expect": {
+      "intent": "query_recent_transactions",
+      "metric": "transaction_list",
+      "date_preset": "this_week",
+      "needs_clarification": false,
+      "date_start_iso": "2026-04-27",
+      "date_end_iso": "2026-04-27",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "income this month summary",
+    "input": "pemasukan bulan ini berapa?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "income_total",
+      "query_type": "income",
+      "date_preset": "this_month",
+      "needs_clarification": false,
+      "date_start_iso": "2026-04-01",
+      "date_end_iso": "2026-04-27",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "yesterday list query",
+    "input": "kmrn beli apa aja?",
+    "expect": {
+      "intent": "query_recent_transactions",
+      "metric": "transaction_list",
+      "date_preset": "yesterday",
+      "needs_clarification": false,
+      "date_offset_start_days": -1,
+      "date_offset_end_days": -1,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "simple expense",
+    "input": "makan 25k nasi padang",
+    "expect": {
+      "intent": "create_expense",
+      "amount": 25000,
+      "category_hint": "Makan & Minum",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "multi expense",
+    "input": "td ke bioskop 40k terus makan 100k",
+    "expect": {
+      "intent": "create_multiple_transactions",
+      "amount": 140000,
+      "transaction_count": 2,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "ambiguous recent past low confidence",
+    "input": "kemarin-kemarin habis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "date_preset": "recent_past_ambiguous",
+      "needs_clarification": true,
+      "date_confidence_max": 0.5,
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "ambiguous several days ago low confidence",
+    "input": "beberapa hari lalu abis brp?",
+    "expect": {
+      "intent": "query_summary",
+      "date_preset": "recent_past_ambiguous",
+      "needs_clarification": true,
+      "date_start_iso": "2026-04-20",
+      "date_end_iso": "2026-04-26",
+      "date_confidence_max": 0.5,
+      "gemini_called": false
+    }
+  }
+]
