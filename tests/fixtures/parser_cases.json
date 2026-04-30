@@ -4,6 +4,8 @@
     "input": "simpan",
     "expect": {
       "intent": "confirm_draft",
+      "action": "confirm_draft",
+      "needs_confirmation": false,
       "gemini_called": false
     }
   },
@@ -12,6 +14,8 @@
     "input": "gx",
     "expect": {
       "intent": "cancel_flow",
+      "action": "cancel_flow",
+      "needs_confirmation": false,
       "gemini_called": false
     }
   },
@@ -20,6 +24,8 @@
     "input": "hari ini abis berapa?",
     "expect": {
       "intent": "query_summary",
+      "action": "run_query",
+      "top_needs_clarification": false,
       "metric": "expense_total",
       "date_preset": "today",
       "needs_clarification": false,
@@ -278,6 +284,32 @@
     }
   },
   {
+    "name": "named month total token summary",
+    "input": "juni totalnya?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "named_month",
+      "needs_clarification": false,
+      "date_start_iso": "2026-06-01",
+      "date_end_iso": "2026-06-30",
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "named month spending token summary",
+    "input": "pengeluaran juni",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "named_month",
+      "needs_clarification": false,
+      "date_start_iso": "2026-06-01",
+      "date_end_iso": "2026-06-30",
+      "gemini_called": false
+    }
+  },
+  {
     "name": "future named month resolves previous year",
     "input": "bulan desember habis brp?",
     "expect": {
@@ -454,6 +486,8 @@
     "input": "makan 25k nasi padang",
     "expect": {
       "intent": "create_expense",
+      "action": "create_draft",
+      "needs_confirmation": true,
       "amount": 25000,
       "category_hint": "Makan & Minum",
       "gemini_called": false
@@ -464,6 +498,8 @@
     "input": "td ke bioskop 40k terus makan 100k",
     "expect": {
       "intent": "create_multiple_transactions",
+      "action": "create_draft",
+      "needs_confirmation": true,
       "amount": 140000,
       "transaction_count": 2,
       "gemini_called": false
@@ -474,6 +510,8 @@
     "input": "kemarin-kemarin habis brp?",
     "expect": {
       "intent": "query_summary",
+      "action": "ask_clarification",
+      "top_needs_clarification": true,
       "date_preset": "recent_past_ambiguous",
       "needs_clarification": true,
       "date_confidence_max": 0.5,

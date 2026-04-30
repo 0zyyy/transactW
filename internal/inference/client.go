@@ -32,19 +32,24 @@ type ParseTextRequest struct {
 }
 
 type ParseTextResponse struct {
-	Intent           string            `json:"intent"`
-	IntentCandidates []IntentCandidate `json:"intent_candidates"`
-	Amount           *int64            `json:"amount"`
-	Currency         string            `json:"currency"`
-	Description      string            `json:"description"`
-	CategoryHint     string            `json:"category_hint"`
-	AccountHint      string            `json:"account_hint"`
-	TransactionDate  string            `json:"transaction_date"`
-	Transactions     []TransactionDraft `json:"transactions"`
-	Query            *QueryDraft        `json:"query,omitempty"`
-	Confidence       float64           `json:"confidence"`
-	MissingFields    []string          `json:"missing_fields"`
-	Raw              map[string]any    `json:"raw,omitempty"`
+	Intent              string             `json:"intent"`
+	Action              string             `json:"action"`
+	ReplyDraft          string             `json:"reply_draft"`
+	NeedsConfirmation   bool               `json:"needs_confirmation"`
+	NeedsClarification  bool               `json:"needs_clarification"`
+	ClarificationPrompt string             `json:"clarification_prompt"`
+	IntentCandidates    []IntentCandidate  `json:"intent_candidates"`
+	Amount              *int64             `json:"amount"`
+	Currency            string             `json:"currency"`
+	Description         string             `json:"description"`
+	CategoryHint        string             `json:"category_hint"`
+	AccountHint         string             `json:"account_hint"`
+	TransactionDate     string             `json:"transaction_date"`
+	Transactions        []TransactionDraft `json:"transactions"`
+	Query               *QueryDraft        `json:"query,omitempty"`
+	Confidence          float64            `json:"confidence"`
+	MissingFields       []string           `json:"missing_fields"`
+	Raw                 map[string]any     `json:"raw,omitempty"`
 }
 
 type IntentCandidate struct {
@@ -65,10 +70,10 @@ type TransactionDraft struct {
 }
 
 type QueryDraft struct {
-	Metric             string    `json:"metric"`
-	Type               string    `json:"type"`
-	DateRange          DateRange `json:"date_range"`
-	NeedsClarification bool      `json:"needs_clarification"`
+	Metric              string    `json:"metric"`
+	Type                string    `json:"type"`
+	DateRange           DateRange `json:"date_range"`
+	NeedsClarification  bool      `json:"needs_clarification"`
 	ClarificationPrompt string    `json:"clarification_prompt"`
 }
 

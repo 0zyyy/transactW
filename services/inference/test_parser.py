@@ -64,6 +64,12 @@ def check_case(case: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
 
     if "intent" in expect:
         assert_equal("intent", parsed.get("intent"), expect["intent"])
+    if "action" in expect:
+        assert_equal("action", parsed.get("action"), expect["action"])
+    if "needs_confirmation" in expect:
+        assert_equal("needs_confirmation", parsed.get("needs_confirmation"), expect["needs_confirmation"])
+    if "top_needs_clarification" in expect:
+        assert_equal("needs_clarification", parsed.get("needs_clarification"), expect["top_needs_clarification"])
     if "amount" in expect:
         assert_equal("amount", parsed.get("amount"), expect["amount"])
     if "category_hint" in expect:

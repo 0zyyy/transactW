@@ -131,6 +131,11 @@ def parse_with_gemini(text: str) -> dict[str, Any]:
         "type": "object",
         "properties": {
             "intent": {"type": "string"},
+            "action": {"type": "string"},
+            "reply_draft": {"type": "string"},
+            "needs_confirmation": {"type": "boolean"},
+            "needs_clarification": {"type": "boolean"},
+            "clarification_prompt": {"type": "string"},
             "intent_candidates": {
                 "type": "array",
                 "items": {
@@ -200,6 +205,11 @@ def parse_with_gemini(text: str) -> dict[str, Any]:
         },
         "required": [
             "intent",
+            "action",
+            "reply_draft",
+            "needs_confirmation",
+            "needs_clarification",
+            "clarification_prompt",
             "intent_candidates",
             "currency",
             "description",
@@ -249,7 +259,8 @@ def parse_with_gemini(text: str) -> dict[str, Any]:
 def build_prompt(text: str) -> str:
     today = datetime.now().date().isoformat()
     return f"""
-You parse Indonesian WhatsApp messages into a transaction draft.
+You are the conversational interpreter for an Indonesian WhatsApp finance bot.
+Interpret the user's message and return one safe structured action.
 Return only JSON matching the schema.
 
 Allowed intents:
@@ -265,6 +276,15 @@ Allowed intents:
 - unknown
 
 Rules:
+- action must be one of: create_draft, run_query, edit_draft, confirm_draft, cancel_flow, show_help, ask_clarification, none.
+- Use create_draft for new expense/income/transfer drafts. Do not save anything.
+- Use run_query for spending/income/history questions. Do not invent query results.
+- Use edit_draft for corrections to an existing pending draft.
+- Use confirm_draft only when the user clearly confirms a pending draft.
+- Use cancel_flow only when the user clearly cancels.
+- needs_confirmation is true for create_draft and edit_draft actions.
+- needs_clarification is true when important details or dates are ambiguous.
+- reply_draft should be a short Indonesian WhatsApp-style acknowledgement or clarification, not a final DB result.
 - Currency is IDR unless clearly different.
 - Amount must be integer rupiah, so "18rb" is 18000 and "47.500" is 47500.
 - If there is no amount, omit the amount field.
@@ -285,7 +305,8 @@ Rules:
 - Query type is expense unless the user clearly asks income or all transactions.
 - Date ranges must be exact YYYY-MM-DD dates based on today {today} and timezone Asia/Jakarta.
 - If date wording is ambiguous, still include the best date_range and reduce date_range.confidence.
-- Do not save anything. This is only a draft.
+- Go owns state, persistence, query execution, and final replies. You only interpret the message.
+- Do not claim anything was saved or queried successfully.
 
 Message:
 {text}
@@ -637,6 +658,11 @@ def unknown_month_date_clarification(text: str) -> dict[str, Any]:
     date_range_value = date_range("", "unknown_month_date", today, today, 0.35)
     return {
         "intent": "query_recent_transactions" if metric == "transaction_list" else "query_summary",
+        "action": "ask_clarification",
+        "reply_draft": query_clarification_prompt(date_range_value),
+        "needs_confirmation": False,
+        "needs_clarification": True,
+        "clarification_prompt": query_clarification_prompt(date_range_value),
         "intent_candidates": [
             {
                 "intent": "query_recent_transactions" if metric == "transaction_list" else "query_summary",
@@ -738,6 +764,11 @@ def query_from_extracted_date_range(original_text: str, normalized_text: str, da
     needs_clarification = date_range_value["confidence"] < 0.60
     parsed = {
         "intent": "query_recent_transactions" if metric == "transaction_list" else "query_summary",
+        "action": "ask_clarification" if needs_clarification else "run_query",
+        "reply_draft": query_clarification_prompt(date_range_value) if needs_clarification else "Aku cek datanya dulu ya.",
+        "needs_confirmation": False,
+        "needs_clarification": needs_clarification,
+        "clarification_prompt": query_clarification_prompt(date_range_value) if needs_clarification else "",
         "intent_candidates": [
             {
                 "intent": "query_recent_transactions" if metric == "transaction_list" else "query_summary",
@@ -1116,36 +1147,37 @@ def extract_transaction_parts(text: str, transaction_date: str, account_hint: st
 
 
 def infer_query(text: str) -> dict[str, Any] | None:
-    query_words = [
-        "habis brp",
-        "habis brpa",
-        "habis brapa",
-        "habis berapa",
-        "abis brp",
-        "abis brpa",
-        "abis brapa",
-        "abis berapa",
-        "pengeluaran",
-        "pemasukan",
-        "income",
-        "spending",
-        "brapa total",
-        "berapa total",
-        "totalnya",
-        "beli apa",
-        "apa aja",
-        "transaksi",
-        "jajan apa",
-    ]
-    if not any(word in text for word in query_words):
+    date_range_value = normalize_date_range(text)
+    if not looks_like_query_text(text):
         return None
 
     metric, tx_type = query_metric_and_type(text)
     return {
         "metric": metric,
         "type": tx_type,
-        "date_range": normalize_date_range(text),
+        "date_range": date_range_value,
     }
+
+
+def looks_like_query_text(text: str) -> bool:
+    if any(phrase in text for phrase in ["apa aja", "beli apa", "transaksi apa", "jajan apa"]):
+        return True
+    query_tokens = {
+        "brp",
+        "brpa",
+        "brapa",
+        "berapa",
+        "total",
+        "totalnya",
+        "pengeluaran",
+        "pemasukan",
+        "income",
+        "spending",
+        "habis",
+        "abis",
+    }
+    tokens = set(re.findall(r"\b[a-z]+\b", text.lower()))
+    return bool(tokens & query_tokens)
 
 
 def query_metric_and_type(text: str) -> tuple[str, str]:
@@ -1540,6 +1572,7 @@ def cleanup_description(text: str, amount: int | None) -> str:
 
 
 def normalize_parse(parsed: dict[str, Any]) -> dict[str, Any]:
+    intent = str(parsed.get("intent") or "unknown")
     amount = parsed.get("amount")
     if amount in ("", None):
         amount = None
@@ -1550,8 +1583,24 @@ def normalize_parse(parsed: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(missing_fields, list):
         missing_fields = []
 
+    query = normalize_query(parsed)
+    needs_clarification = bool(parsed.get("needs_clarification"))
+    clarification_prompt = str(parsed.get("clarification_prompt") or "")
+    if query is not None and query.get("needs_clarification"):
+        needs_clarification = True
+        clarification_prompt = clarification_prompt or str(query.get("clarification_prompt") or "")
+    action = normalize_action(parsed.get("action"), intent, needs_clarification)
+    needs_confirmation = bool(parsed.get("needs_confirmation"))
+    if action in {"create_draft", "edit_draft"}:
+        needs_confirmation = True
+
     return {
-        "intent": str(parsed.get("intent") or "unknown"),
+        "intent": intent,
+        "action": action,
+        "reply_draft": str(parsed.get("reply_draft") or default_reply_draft(intent, action, needs_clarification)),
+        "needs_confirmation": needs_confirmation,
+        "needs_clarification": needs_clarification,
+        "clarification_prompt": clarification_prompt,
         "intent_candidates": normalize_intent_candidates(parsed),
         "amount": amount,
         "currency": str(parsed.get("currency") or "IDR"),
@@ -1560,10 +1609,50 @@ def normalize_parse(parsed: dict[str, Any]) -> dict[str, Any]:
         "account_hint": str(parsed.get("account_hint") or ""),
         "transaction_date": str(parsed.get("transaction_date") or datetime.now().date().isoformat()),
         "transactions": normalize_transactions(parsed),
-        "query": normalize_query(parsed),
+        "query": query,
         "confidence": float(parsed.get("confidence") or 0),
         "missing_fields": [str(item) for item in missing_fields],
     }
+
+
+def normalize_action(value: Any, intent: str, needs_clarification: bool) -> str:
+    allowed = {"create_draft", "run_query", "edit_draft", "confirm_draft", "cancel_flow", "show_help", "ask_clarification", "none"}
+    action = str(value or "")
+    if action in allowed:
+        return "ask_clarification" if needs_clarification else action
+    if needs_clarification:
+        return "ask_clarification"
+    if intent in {"create_expense", "create_income", "create_multiple_transactions"}:
+        return "create_draft"
+    if intent in {"query_summary", "query_recent_transactions"}:
+        return "run_query"
+    if intent == "edit_draft":
+        return "edit_draft"
+    if intent == "confirm_draft":
+        return "confirm_draft"
+    if intent == "cancel_flow":
+        return "cancel_flow"
+    if intent == "help":
+        return "show_help"
+    return "none"
+
+
+def default_reply_draft(intent: str, action: str, needs_clarification: bool) -> str:
+    if needs_clarification or action == "ask_clarification":
+        return "Aku belum yakin maksudnya. Bisa tulis lagi lebih jelas?"
+    if action == "run_query":
+        return "Aku cek datanya dulu ya."
+    if action == "create_draft":
+        return "Aku buat draft transaksinya dulu ya."
+    if action == "edit_draft":
+        return "Aku update draft-nya dulu ya."
+    if action == "confirm_draft":
+        return "Siap, aku proses konfirmasinya."
+    if action == "cancel_flow":
+        return "Siap, aku batalkan."
+    if intent == "help":
+        return "Kirim transaksi atau pertanyaan pengeluaran lewat chat."
+    return ""
 
 
 def normalize_category(value: Any) -> str:
