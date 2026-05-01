@@ -5,6 +5,8 @@
 .gocache/
 .gomodcache/
 docs/
+.codex
+tst_img/
 __pycache__/
 *.py[cod]
 .pytest_cache/
