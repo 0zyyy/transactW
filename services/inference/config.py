@@ -25,6 +25,11 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 GEMINI_TIMEOUT_SECONDS = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "20"))
 PARSER_VERSION = "2026-04-27.multi-transaction-v1"
 LOCAL_CONFIDENCE_THRESHOLD = float(os.getenv("LOCAL_CONFIDENCE_THRESHOLD", "0.90"))
+OCR_ENGINE = os.getenv("OCR_ENGINE", "doctr")
+OCR_GEMINI_VERIFY = os.getenv("OCR_GEMINI_VERIFY", "true").lower() == "true"
+OCR_ALLOW_GEMINI_VISION_FALLBACK = os.getenv("OCR_ALLOW_GEMINI_VISION_FALLBACK", "false").lower() == "true"
+DOCTR_DET_ARCH = os.getenv("DOCTR_DET_ARCH", "fast_base")
+DOCTR_RECO_ARCH = os.getenv("DOCTR_RECO_ARCH", "crnn_vgg16_bn")
 
 CATEGORY_HINTS = {
     "Makan & Minum",

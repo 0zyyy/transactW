@@ -51,12 +51,20 @@ def main() -> int:
         if errors:
             failures.append(format_failure(case, parsed, errors))
 
+    receipt_test_cases = receipt_cases()
+    for case in receipt_test_cases:
+        candidates = parser.extract_receipt_candidates(case["ocr"])
+        parsed = parser.normalize_receipt_ocr(parser.ocr_candidates_to_receipt_ocr(candidates), "")
+        errors = check_case(case, parsed)
+        if errors:
+            failures.append(format_failure(case, parsed, errors))
+
     if failures:
         print("\n\n".join(failures))
         print(f"\nFAILED: {len(failures)} / {len(cases)} parser cases failed")
         return 1
 
-    print(f"OK: {len(cases)} parser cases passed")
+    print(f"OK: {len(cases)} parser cases and {len(receipt_test_cases)} receipt cases passed")
     return 0
 
 
@@ -368,6 +376,45 @@ def validation_cases() -> list[dict[str, Any]]:
                 "needs_confirmation": True,
                 "amount": 2000000,
             },
+        },
+    ]
+
+
+def receipt_cases() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "receipt total belanja creates draft",
+            "input": "receipt image",
+            "ocr": {
+                "lines": [
+                    {"text": "TOKO NGAMPELSARI", "confidence": 0.96},
+                    {"text": "AIR MINERAL", "confidence": 0.95},
+                    {"text": "TOTAL BELANJA :", "confidence": 0.99},
+                    {"text": "28.200", "confidence": 0.99},
+                    {"text": "TUNAI :", "confidence": 0.98},
+                    {"text": "50.000", "confidence": 0.98},
+                    {"text": "KEMBALI :", "confidence": 0.98},
+                    {"text": "21.800", "confidence": 0.98},
+                ]
+            },
+            "expect": {"action": "create_draft", "amount": 28200, "needs_confirmation": True},
+        },
+        {
+            "name": "atm withdrawal is not receipt",
+            "input": "atm slip image",
+            "ocr": {
+                "lines": [
+                    {"text": "ATM LINK", "confidence": 0.96},
+                    {"text": "PENARIKAN", "confidence": 0.96},
+                    {"text": "RP.", "confidence": 0.96},
+                    {"text": "100.000,00", "confidence": 0.96},
+                    {"text": "SALDO", "confidence": 0.96},
+                    {"text": "RP.", "confidence": 0.96},
+                    {"text": "1.724.000,00", "confidence": 0.96},
+                    {"text": "NO KARTU", "confidence": 0.96},
+                ]
+            },
+            "expect": {"action": "none", "needs_confirmation": False},
         },
     ]
 

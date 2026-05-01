@@ -10,15 +10,20 @@ from config import (
     GEMINI_MODEL,
     GEMINI_TIMEOUT_SECONDS,
     LOCAL_CONFIDENCE_THRESHOLD,
+    OCR_ALLOW_GEMINI_VISION_FALLBACK,
+    OCR_ENGINE,
+    OCR_GEMINI_VERIFY,
     PARSER_VERSION,
     PORT,
 )
 from dates import date_range, indonesian_months, normalize_date_range as normalize_date_range_for_today
 from gemini import extract_gemini_text, generate_content, strip_json_fence
 from normalize import normalize_category, parse_int_amount, safe_float
+from ocr import OCRError, extract_text_with_doctr
 from offline import cleanup_description, infer_account, infer_category, infer_intent_candidates
 from prompts import build_prompt, build_receipt_ocr_prompt
-from receipt import best_receipt_total, infer_receipt_category, normalize_receipt_date, receipt_description
+from receipt import best_receipt_total, extract_receipt_candidates, infer_receipt_category, normalize_receipt_date, ocr_candidates_to_receipt_ocr, receipt_description
+from receipt_verify import verify_receipt_with_gemini
 
 
 def normalize_date_range(text: str) -> dict[str, Any]:
@@ -315,55 +320,106 @@ def route_parse(text: str, conversation: Any = None) -> dict[str, Any]:
 
 
 def route_parse_receipt(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> dict[str, Any]:
+    if OCR_ENGINE != "doctr":
+        return route_parse_receipt_with_gemini_vision(image_base64, mime_type, caption, "ocr_engine_not_doctr")
+
+    try:
+        ocr_result = extract_text_with_doctr(image_base64)
+    except OCRError as exc:
+        if OCR_ALLOW_GEMINI_VISION_FALLBACK:
+            return route_parse_receipt_with_gemini_vision(image_base64, mime_type, caption, f"doctr_error:{exc}")
+        return receipt_ocr_clarification(caption, f"doctr_error:{exc}")
+
+    candidates = extract_receipt_candidates(ocr_result)
+    if not candidates.get("is_receipt_candidate"):
+        parsed = normalize_receipt_ocr(ocr_candidates_to_receipt_ocr(candidates), caption)
+        parsed["raw"] = receipt_raw("doctr", caption, ocr_result, candidates, None, "not_receipt_candidate")
+        return parsed
+
+    verifier = None
+    if OCR_GEMINI_VERIFY and GEMINI_API_KEY:
+        try:
+            verifier = verify_receipt_with_gemini(ocr_result, candidates)
+        except Exception as exc:
+            verifier = {"error": str(exc)}
+
+    ocr = ocr_candidates_to_receipt_ocr(candidates, verifier if verifier and "error" not in verifier else None)
+    parsed = normalize_receipt_ocr(ocr, caption)
+    provider = "doctr_gemini_verifier" if verifier else "doctr"
+    parsed["raw"] = receipt_raw(provider, caption, ocr_result, candidates, verifier, "receipt_ocr")
+    return parsed
+
+
+def route_parse_receipt_with_gemini_vision(image_base64: str, mime_type: str, caption: str, reason: str) -> dict[str, Any]:
     if not GEMINI_API_KEY:
-        return normalize_parse(
-            {
-                "intent": "unknown",
-                "action": "ask_clarification",
-                "reply_draft": "OCR struk butuh Gemini Vision. Kirim teks transaksinya dulu ya.",
-                "needs_confirmation": False,
-                "needs_clarification": True,
-                "clarification_prompt": "OCR struk belum aktif. Kirim nominal dan catatan transaksinya sebagai teks dulu ya.",
-                "intent_candidates": [
-                    {
-                        "intent": "create_expense",
-                        "score": 0.4,
-                        "reason": "receipt image received but vision is disabled",
-                        "needs_reply": True,
-                    }
-                ],
-                "currency": "IDR",
-                "merchant_name": "",
-                "description": caption,
-                "category_hint": "",
-                "account_hint": "",
-                "transaction_date": datetime.now().date().isoformat(),
-                "transactions": [],
-                "confidence": 0.0,
-                "missing_fields": ["amount"],
-                "raw": {
-                    "provider": "receipt_ocr_disabled",
-                    "gemini_called": False,
-                    "fallback_reason": "gemini_disabled",
-                    "original_text": caption,
-                    "normalized_text": caption,
-                    "parser_version": PARSER_VERSION,
-                },
-            }
-        )
-    ocr = parse_receipt_with_gemini(image_base64, mime_type, caption, conversation)
+        return receipt_ocr_clarification(caption, reason)
+    ocr = parse_receipt_with_gemini(image_base64, mime_type, caption)
     parsed = normalize_receipt_ocr(ocr, caption)
     parsed["raw"] = {
         "provider": "gemini_vision",
         "model": GEMINI_MODEL,
         "gemini_called": True,
-        "fallback_reason": "receipt_ocr",
+        "fallback_reason": reason,
         "original_text": caption,
         "normalized_text": caption,
         "receipt_ocr": ocr,
         "parser_version": PARSER_VERSION,
     }
     return parsed
+
+
+def receipt_ocr_clarification(caption: str, reason: str) -> dict[str, Any]:
+    parsed = normalize_parse(
+        {
+            "intent": "unknown",
+            "action": "ask_clarification",
+            "reply_draft": "OCR struk lagi bermasalah.",
+            "needs_confirmation": False,
+            "needs_clarification": True,
+            "clarification_prompt": "OCR struk lagi bermasalah. Kirim foto yang lebih jelas atau tulis totalnya sebagai teks dulu ya.",
+            "intent_candidates": [
+                {
+                    "intent": "create_expense",
+                    "score": 0.4,
+                    "reason": "receipt image received but OCR failed",
+                    "needs_reply": True,
+                }
+            ],
+            "currency": "IDR",
+            "merchant_name": "",
+            "description": caption,
+            "category_hint": "",
+            "account_hint": "",
+            "transaction_date": datetime.now().date().isoformat(),
+            "transactions": [],
+            "confidence": 0.0,
+            "missing_fields": ["amount"],
+        }
+    )
+    parsed["raw"] = {
+        "provider": "receipt_ocr_failed",
+        "gemini_called": False,
+        "fallback_reason": reason,
+        "original_text": caption,
+        "normalized_text": caption,
+        "parser_version": PARSER_VERSION,
+    }
+    return parsed
+
+
+def receipt_raw(provider: str, caption: str, ocr_result: dict[str, Any], candidates: dict[str, Any], verifier: dict[str, Any] | None, reason: str) -> dict[str, Any]:
+    return {
+        "provider": provider,
+        "model": GEMINI_MODEL if verifier else "",
+        "gemini_called": bool(verifier),
+        "fallback_reason": reason,
+        "original_text": caption,
+        "normalized_text": caption,
+        "receipt_ocr": ocr_result,
+        "receipt_candidates": candidates,
+        "gemini_verifier": verifier or {},
+        "parser_version": PARSER_VERSION,
+    }
 
 
 def normalize_receipt_ocr(ocr: dict[str, Any], caption: str) -> dict[str, Any]:
