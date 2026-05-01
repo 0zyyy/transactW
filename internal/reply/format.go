@@ -94,15 +94,28 @@ func formatSingle(parsed inference.ParseTextResponse) string {
 		description = "-"
 	}
 
-	return fmt.Sprintf(
-		"%s kebaca:\nAmount: %s\nKategori: %s\nCatatan: %s\nTanggal: %s\nConfidence: %.2f\n\nBalas `simpan` untuk lanjut, atau `debug ...` untuk lihat JSON.",
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf(
+		"%s kebaca:\nAmount: %s\nKategori: %s\nCatatan: %s\nTanggal: %s\nConfidence: %.2f\n",
 		kind,
 		FormatAmountIDR(valueOrZero(parsed.Amount)),
 		category,
 		description,
 		parsed.TransactionDate,
 		parsed.Confidence,
-	)
+	))
+	if items := inference.ReceiptItems(parsed); len(items) > 0 {
+		builder.WriteString("\nItem struk yang kebaca:\n")
+		for index, item := range items {
+			if index >= 8 {
+				builder.WriteString(fmt.Sprintf("...dan %d item lain\n", len(items)-index))
+				break
+			}
+			builder.WriteString(fmt.Sprintf("%d. %s - %s\n", item.Index, item.Name, FormatAmountIDR(item.Amount)))
+		}
+	}
+	builder.WriteString("\nBalas `simpan` untuk lanjut, atau `debug ...` untuk lihat JSON.")
+	return builder.String()
 }
 
 func formatQuery(parsed inference.ParseTextResponse) string {

@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"fmt"
+	"strings"
 
 	"transactw/internal/inference"
 	"transactw/internal/reply"
@@ -69,7 +70,19 @@ func HandleParsed(store DraftStore, conversationKey string, parsed inference.Par
 			return Result{Reply: parsed.ReplyDraft}
 		}
 		return Result{Reply: reply.Format(parsed, debug)}
-	case "run_query", "show_help", "none", "":
+	case "run_query":
+		if parsed.Query == nil {
+			return Result{Reply: reply.Format(parsed, debug)}
+		}
+		if parsed.Query.NeedsClarification {
+			return Result{Reply: reply.Format(parsed, debug)}
+		}
+		result, err := store.RunQuery(conversationKey, *parsed.Query)
+		if err != nil {
+			return Result{Err: err}
+		}
+		return Result{Reply: formatQueryResult(result)}
+	case "show_help", "none", "":
 		return Result{Reply: reply.Format(parsed, debug)}
 	default:
 		return Result{Reply: reply.Format(parsed, debug)}
@@ -233,9 +246,47 @@ func formatEditDraft(parsed inference.ParseTextResponse, debug bool) string {
 
 func formatConfirmed(parsed inference.ParseTextResponse) string {
 	if parsed.Intent == "create_multiple_transactions" && len(parsed.Transactions) > 0 {
-		return fmt.Sprintf("Siap, %d transaksi dikonfirmasi sementara.\nTotal: %s", len(parsed.Transactions), reply.FormatAmountIDR(valueOrZero(parsed.Amount)))
+		return fmt.Sprintf("Siap, %d transaksi disimpan.\nTotal: %s", len(parsed.Transactions), reply.FormatAmountIDR(valueOrZero(parsed.Amount)))
 	}
-	return fmt.Sprintf("Siap, transaksi dikonfirmasi sementara.\nAmount: %s\nCatatan: %s", reply.FormatAmountIDR(valueOrZero(parsed.Amount)), parsed.Description)
+	return fmt.Sprintf("Siap, transaksi disimpan.\nAmount: %s\nCatatan: %s", reply.FormatAmountIDR(valueOrZero(parsed.Amount)), parsed.Description)
+}
+
+func formatQueryResult(result QueryResult) string {
+	if result.Metric == "transaction_list" {
+		if len(result.Transactions) == 0 {
+			return fmt.Sprintf("Belum ada transaksi untuk %s s/d %s.", result.StartDate, result.EndDate)
+		}
+
+		var builder strings.Builder
+		builder.WriteString(fmt.Sprintf("Transaksi %s s/d %s:\n", result.StartDate, result.EndDate))
+		for index, tx := range result.Transactions {
+			category := tx.CategoryName
+			if category == "" {
+				category = "Lainnya"
+			}
+			description := tx.Description
+			if description == "" {
+				description = "-"
+			}
+			builder.WriteString(fmt.Sprintf(
+				"%d. %s - %s - %s - %s\n",
+				index+1,
+				tx.TransactionDate,
+				category,
+				description,
+				reply.FormatAmountIDR(tx.Amount),
+			))
+		}
+		return strings.TrimSpace(builder.String())
+	}
+
+	label := "Pengeluaran"
+	if result.Type == "income" || result.Metric == "income_total" {
+		label = "Pemasukan"
+	} else if result.Type == "all" {
+		label = "Total transaksi"
+	}
+	return fmt.Sprintf("%s %s s/d %s: %s", label, result.StartDate, result.EndDate, reply.FormatAmountIDR(result.Total))
 }
 
 func valueOrZero(value *int64) int64 {

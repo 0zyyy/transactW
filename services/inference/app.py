@@ -1,77 +1,21 @@
 #!/usr/bin/env python3
 import json
-import os
 import re
-import urllib.error
-import urllib.request
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-
-def load_env_file(path: str) -> None:
-    if not os.path.exists(path):
-        return
-    with open(path, "r", encoding="utf-8") as file:
-        for line in file:
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#") or "=" not in stripped:
-                continue
-            key, value = stripped.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            if key and key not in os.environ:
-                os.environ[key] = value
-
-
-load_env_file(".env")
-load_env_file(".env.local")
-
-PORT = int(os.getenv("INFERENCE_PORT", "8090"))
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
-GEMINI_TIMEOUT_SECONDS = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "20"))
-PARSER_VERSION = "2026-04-27.multi-transaction-v1"
-LOCAL_CONFIDENCE_THRESHOLD = float(os.getenv("LOCAL_CONFIDENCE_THRESHOLD", "0.90"))
-CATEGORY_HINTS = {
-    "Makan & Minum",
-    "Transport",
-    "Belanja Harian",
-    "Tagihan",
-    "Hiburan",
-    "Kesehatan",
-    "Pendidikan",
-    "Income",
-    "Transfer",
-    "Lainnya",
-    "",
-}
-CATEGORY_ALIASES = {
-    "makanan": "Makan & Minum",
-    "makan": "Makan & Minum",
-    "minuman": "Makan & Minum",
-    "food": "Makan & Minum",
-    "kuliner": "Makan & Minum",
-    "restoran": "Makan & Minum",
-    "restaurant": "Makan & Minum",
-    "transportasi": "Transport",
-    "transportation": "Transport",
-    "belanja": "Belanja Harian",
-    "groceries": "Belanja Harian",
-    "grocery": "Belanja Harian",
-    "hiburan": "Hiburan",
-    "entertainment": "Hiburan",
-    "kesehatan": "Kesehatan",
-    "health": "Kesehatan",
-    "pendidikan": "Pendidikan",
-    "education": "Pendidikan",
-    "pemasukan": "Income",
-    "pendapatan": "Income",
-    "income": "Income",
-    "transfer": "Transfer",
-    "lainnya": "Lainnya",
-    "other": "Lainnya",
-}
+from config import (
+    GEMINI_API_KEY,
+    GEMINI_MODEL,
+    GEMINI_TIMEOUT_SECONDS,
+    LOCAL_CONFIDENCE_THRESHOLD,
+    PARSER_VERSION,
+    PORT,
+)
+from gemini import extract_gemini_text, generate_content, strip_json_fence
+from normalize import normalize_category, parse_int_amount, safe_float
+from receipt import best_receipt_total, infer_receipt_category, normalize_receipt_date, receipt_description
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -89,12 +33,23 @@ class Handler(BaseHTTPRequestHandler):
         self.write_json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
-        if self.path != "/v1/parse/text":
+        if self.path not in {"/v1/parse/text", "/v1/parse/receipt"}:
             self.write_json(404, {"error": "not found"})
             return
 
         try:
             request = self.read_json()
+            if self.path == "/v1/parse/receipt":
+                image_base64 = str(request.get("image_base64") or "").strip()
+                mime_type = str(request.get("mime_type") or "image/jpeg").strip()
+                caption = str(request.get("caption") or "").strip()
+                if not image_base64:
+                    self.write_json(400, {"error": "image_base64 is required"})
+                    return
+                parsed = route_parse_receipt(image_base64, mime_type, caption, request.get("conversation"))
+                self.write_json(200, parsed)
+                return
+
             text = str(request.get("text") or "").strip()
             if not text:
                 self.write_json(400, {"error": "text is required"})
@@ -151,6 +106,7 @@ def parse_with_gemini(text: str, conversation: Any = None) -> dict[str, Any]:
             },
             "amount": {"type": "integer"},
             "currency": {"type": "string"},
+            "merchant_name": {"type": "string"},
             "description": {"type": "string"},
             "category_hint": {"type": "string"},
             "account_hint": {"type": "string"},
@@ -195,6 +151,7 @@ def parse_with_gemini(text: str, conversation: Any = None) -> dict[str, Any]:
                         "type": {"type": "string"},
                         "amount": {"type": "integer"},
                         "currency": {"type": "string"},
+                        "merchant_name": {"type": "string"},
                         "description": {"type": "string"},
                         "category_hint": {"type": "string"},
                         "account_hint": {"type": "string"},
@@ -204,6 +161,7 @@ def parse_with_gemini(text: str, conversation: Any = None) -> dict[str, Any]:
                         "type",
                         "amount",
                         "currency",
+                        "merchant_name",
                         "description",
                         "category_hint",
                         "account_hint",
@@ -223,6 +181,7 @@ def parse_with_gemini(text: str, conversation: Any = None) -> dict[str, Any]:
             "clarification_prompt",
             "intent_candidates",
             "currency",
+            "merchant_name",
             "description",
             "category_hint",
             "account_hint",
@@ -241,30 +200,59 @@ def parse_with_gemini(text: str, conversation: Any = None) -> dict[str, Any]:
             "responseSchema": schema,
         },
     }
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        + GEMINI_MODEL
-        + ":generateContent?key="
-        + GEMINI_API_KEY
-    )
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=GEMINI_TIMEOUT_SECONDS) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"gemini HTTP {exc.code}: {detail}") from exc
-
+    data = generate_content(payload)
     text_response = extract_gemini_text(data)
     parsed = json.loads(strip_json_fence(text_response))
     parsed["_source_text"] = text
     return normalize_parse(parsed)
+
+
+def parse_receipt_with_gemini(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> dict[str, Any]:
+    today = datetime.now().date().isoformat()
+    prompt = f"""
+You are an OCR extractor for receipt/payment-proof images.
+Return only raw facts visible in the image as JSON. Do not decide finance-bot actions.
+
+Expected JSON shape:
+{{
+  "is_receipt": true,
+  "receipt_confidence": 0.0,
+  "merchant": "",
+  "date": "YYYY-MM-DD or empty",
+  "currency": "IDR",
+  "totals": [{{"label": "grand total", "amount": 0, "confidence": 0.0}}],
+  "line_items": [{{"name": "", "amount": 0, "confidence": 0.0}}],
+  "payment_method": "",
+  "notes": ""
+}}
+
+Extraction rules:
+- Set is_receipt false for memes, selfies, screenshots unrelated to purchases, or arbitrary photos.
+- receipt_confidence is confidence that the image is a receipt/invoice/payment proof.
+- Keep every plausible total candidate in totals with its visible label: total, grand total, total bayar, jumlah, subtotal, tax, change, kembalian, diskon, etc.
+- Amounts must be integer rupiah when possible. "47.500" means 47500.
+- Prefer visible date formatted as YYYY-MM-DD. If no date is visible, leave date empty; do not invent {today}.
+- Only include line_items when name and amount are both clearly visible.
+- Do not calculate or infer missing totals. Only transcribe visible facts.
+
+Caption: {caption}
+""".strip()
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": mime_type or "image/jpeg", "data": image_base64}},
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.1,
+            "responseMimeType": "application/json",
+        },
+    }
+    data = generate_content(payload)
+    return json.loads(strip_json_fence(extract_gemini_text(data)))
 
 
 def build_prompt(text: str, conversation: Any = None) -> str:
@@ -294,12 +282,16 @@ Rules:
 - Use edit_draft for corrections to an existing pending draft.
 - For edit_draft, include edit with target_item_index when the user points to an item like "yang kedua".
 - Only use edit_draft if conversation.has_pending_draft is true; otherwise ask clarification.
+- conversation.receipt_items may list OCR receipt rows for context. These are evidence for the one receipt draft, not separate saved transactions unless draft_summary also lists them.
+- If the user corrects a receipt total, use edit_draft field amount without relying on receipt_items index.
+- If the user corrects a receipt item name/price but the saved draft is one receipt total, ask clarification unless they clearly provide the corrected final total.
 - Use confirm_draft only when the user clearly confirms a pending draft.
 - Use cancel_flow only when the user clearly cancels.
 - needs_confirmation is true for create_draft and edit_draft actions.
 - needs_clarification is true when important details or dates are ambiguous.
 - reply_draft should be a short Indonesian WhatsApp-style acknowledgement or clarification, not a final DB result.
 - Currency is IDR unless clearly different.
+- merchant_name should be a store/merchant/payee name when clearly present, otherwise empty string.
 - Amount must be integer rupiah, so "18rb" is 18000 and "47.500" is 47500.
 - If there is no amount, omit the amount field.
 - transaction_date is YYYY-MM-DD. Use {today} for today-relative messages.
@@ -340,32 +332,16 @@ def safe_conversation_context(value: Any) -> dict[str, Any]:
     draft_summary = value.get("draft_summary")
     if not isinstance(draft_summary, list):
         draft_summary = []
+    receipt_items = value.get("receipt_items")
+    if not isinstance(receipt_items, list):
+        receipt_items = []
     return {
         "has_pending_draft": bool(value.get("has_pending_draft")),
         "state": str(value.get("state") or ""),
         "last_bot_prompt": str(value.get("last_bot_prompt") or ""),
         "draft_summary": draft_summary[:10],
+        "receipt_items": receipt_items[:20],
     }
-
-
-def extract_gemini_text(data: dict[str, Any]) -> str:
-    candidates = data.get("candidates") or []
-    if not candidates:
-        raise RuntimeError("gemini returned no candidates")
-    content = candidates[0].get("content") or {}
-    parts = content.get("parts") or []
-    texts = [str(part.get("text")) for part in parts if part.get("text") is not None]
-    if not texts:
-        raise RuntimeError("gemini returned no text")
-    return "\n".join(texts)
-
-
-def strip_json_fence(value: str) -> str:
-    stripped = value.strip()
-    if stripped.startswith("```"):
-        stripped = re.sub(r"^```(?:json)?", "", stripped).strip()
-        stripped = re.sub(r"```$", "", stripped).strip()
-    return stripped
 
 
 def route_parse(text: str, conversation: Any = None) -> dict[str, Any]:
@@ -446,6 +422,143 @@ def route_parse(text: str, conversation: Any = None) -> dict[str, Any]:
             "parser_version": PARSER_VERSION,
         }
         return local
+
+
+def route_parse_receipt(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> dict[str, Any]:
+    if not GEMINI_API_KEY:
+        return normalize_parse(
+            {
+                "intent": "unknown",
+                "action": "ask_clarification",
+                "reply_draft": "OCR struk butuh Gemini Vision. Kirim teks transaksinya dulu ya.",
+                "needs_confirmation": False,
+                "needs_clarification": True,
+                "clarification_prompt": "OCR struk belum aktif. Kirim nominal dan catatan transaksinya sebagai teks dulu ya.",
+                "intent_candidates": [
+                    {
+                        "intent": "create_expense",
+                        "score": 0.4,
+                        "reason": "receipt image received but vision is disabled",
+                        "needs_reply": True,
+                    }
+                ],
+                "currency": "IDR",
+                "merchant_name": "",
+                "description": caption,
+                "category_hint": "",
+                "account_hint": "",
+                "transaction_date": datetime.now().date().isoformat(),
+                "transactions": [],
+                "confidence": 0.0,
+                "missing_fields": ["amount"],
+                "raw": {
+                    "provider": "receipt_ocr_disabled",
+                    "gemini_called": False,
+                    "fallback_reason": "gemini_disabled",
+                    "original_text": caption,
+                    "normalized_text": caption,
+                    "parser_version": PARSER_VERSION,
+                },
+            }
+        )
+    ocr = parse_receipt_with_gemini(image_base64, mime_type, caption, conversation)
+    parsed = normalize_receipt_ocr(ocr, caption)
+    parsed["raw"] = {
+        "provider": "gemini_vision",
+        "model": GEMINI_MODEL,
+        "gemini_called": True,
+        "fallback_reason": "receipt_ocr",
+        "original_text": caption,
+        "normalized_text": caption,
+        "receipt_ocr": ocr,
+        "parser_version": PARSER_VERSION,
+    }
+    return parsed
+
+
+def normalize_receipt_ocr(ocr: dict[str, Any], caption: str) -> dict[str, Any]:
+    today = datetime.now().date().isoformat()
+    if not isinstance(ocr, dict) or not bool(ocr.get("is_receipt")):
+        return normalize_parse(
+            {
+                "intent": "unknown",
+                "action": "none",
+                "reply_draft": "",
+                "needs_confirmation": False,
+                "needs_clarification": False,
+                "clarification_prompt": "",
+                "intent_candidates": [],
+                "currency": "IDR",
+                "merchant_name": "",
+                "description": caption,
+                "category_hint": "",
+                "account_hint": "",
+                "transaction_date": today,
+                "transactions": [],
+                "confidence": safe_float(ocr.get("receipt_confidence"), 0) if isinstance(ocr, dict) else 0,
+                "missing_fields": [],
+            }
+        )
+
+    total = best_receipt_total(ocr.get("totals"))
+    if total is None:
+        return normalize_parse(
+            {
+                "intent": "unknown",
+                "action": "ask_clarification",
+                "reply_draft": "Struk kebaca, tapi totalnya belum jelas.",
+                "needs_confirmation": False,
+                "needs_clarification": True,
+                "clarification_prompt": "Struknya kebaca, tapi totalnya belum jelas. Bisa kirim foto yang lebih terang atau tulis totalnya?",
+                "intent_candidates": [
+                    {
+                        "intent": "create_expense",
+                        "score": 0.5,
+                        "reason": "receipt detected but total is missing or unreadable",
+                        "needs_reply": True,
+                    }
+                ],
+                "currency": str(ocr.get("currency") or "IDR"),
+                "merchant_name": str(ocr.get("merchant") or ""),
+                "description": receipt_description(ocr, caption),
+                "category_hint": infer_receipt_category(ocr),
+                "account_hint": "",
+                "transaction_date": normalize_receipt_date(ocr.get("date"), today),
+                "transactions": [],
+                "confidence": min(safe_float(ocr.get("receipt_confidence"), 0.5), 0.6),
+                "missing_fields": ["amount"],
+            }
+        )
+
+    amount, total_confidence = total
+    return normalize_parse(
+        {
+            "intent": "create_expense",
+            "action": "create_draft",
+            "reply_draft": "Struk kebaca sebagai draft pengeluaran.",
+            "needs_confirmation": True,
+            "needs_clarification": False,
+            "clarification_prompt": "",
+            "intent_candidates": [
+                {
+                    "intent": "create_expense",
+                    "score": max(safe_float(ocr.get("receipt_confidence"), 0.7), total_confidence),
+                    "reason": "receipt total detected",
+                    "needs_reply": False,
+                }
+            ],
+            "amount": amount,
+            "currency": str(ocr.get("currency") or "IDR"),
+            "merchant_name": str(ocr.get("merchant") or ""),
+            "description": receipt_description(ocr, caption),
+            "category_hint": infer_receipt_category(ocr),
+            "account_hint": "",
+            "transaction_date": normalize_receipt_date(ocr.get("date"), today),
+            "transactions": [],
+            "confidence": min(max(safe_float(ocr.get("receipt_confidence"), 0.7), total_confidence), 0.95),
+            "missing_fields": [],
+        }
+    )
 
 
 def normalize_chat_typos(text: str) -> str:
@@ -1373,11 +1486,10 @@ def cleanup_description(text: str, amount: int | None) -> str:
 def normalize_parse(parsed: dict[str, Any]) -> dict[str, Any]:
     source_text = str(parsed.get("_source_text") or parsed.get("description") or "")
     intent = normalize_intent_from_source(str(parsed.get("intent") or "unknown"), source_text)
-    amount = parsed.get("amount")
-    if amount in ("", None):
-        amount = None
-    else:
-        amount = int(amount)
+    amount = parse_int_amount(parsed.get("amount"))
+    transactions = normalize_transactions(parsed)
+    if amount is None and transactions:
+        amount = sum(int(transaction["amount"]) for transaction in transactions)
 
     missing_fields = parsed.get("missing_fields")
     if not isinstance(missing_fields, list):
@@ -1410,11 +1522,12 @@ def normalize_parse(parsed: dict[str, Any]) -> dict[str, Any]:
         "intent_candidates": normalize_intent_candidates(parsed),
         "amount": amount,
         "currency": str(parsed.get("currency") or "IDR"),
+        "merchant_name": str(parsed.get("merchant_name") or ""),
         "description": str(parsed.get("description") or ""),
         "category_hint": normalize_category(parsed.get("category_hint")),
         "account_hint": str(parsed.get("account_hint") or ""),
         "transaction_date": str(parsed.get("transaction_date") or datetime.now().date().isoformat()),
-        "transactions": normalize_transactions(parsed),
+        "transactions": transactions,
         "query": query,
         "edit": normalize_edit(parsed),
         "confidence": float(parsed.get("confidence") or 0),
@@ -1480,13 +1593,6 @@ def default_reply_draft(intent: str, action: str, needs_clarification: bool) -> 
     return ""
 
 
-def normalize_category(value: Any) -> str:
-    category = str(value or "").strip()
-    if category in CATEGORY_HINTS:
-        return category
-    return CATEGORY_ALIASES.get(category.lower(), "Lainnya" if category else "")
-
-
 def normalize_transactions(parsed: dict[str, Any]) -> list[dict[str, Any]]:
     transactions = parsed.get("transactions")
     if not isinstance(transactions, list):
@@ -1499,13 +1605,15 @@ def normalize_transactions(parsed: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(transaction, dict):
             continue
         raw_amount = transaction.get("amount")
-        if raw_amount in ("", None):
+        amount = parse_int_amount(raw_amount)
+        if amount is None:
             continue
         normalized.append(
             {
                 "type": str(transaction.get("type") or "expense"),
-                "amount": int(raw_amount),
+                "amount": amount,
                 "currency": str(transaction.get("currency") or parsed.get("currency") or "IDR"),
+                "merchant_name": str(transaction.get("merchant_name") or parsed.get("merchant_name") or ""),
                 "description": str(transaction.get("description") or ""),
                 "category_hint": normalize_category(transaction.get("category_hint")),
                 "account_hint": str(transaction.get("account_hint") or fallback_account),
@@ -1541,11 +1649,9 @@ def normalize_edit(parsed: dict[str, Any]) -> dict[str, Any] | None:
         except (TypeError, ValueError):
             pass
     amount = edit.get("amount") if edit.get("amount") not in (None, "") else parsed.get("amount")
-    if amount not in (None, ""):
-        try:
-            normalized["amount"] = int(amount)
-        except (TypeError, ValueError):
-            pass
+    parsed_amount = parse_int_amount(amount)
+    if parsed_amount is not None:
+        normalized["amount"] = parsed_amount
     if normalized["field"] == "category" and not normalized["category_hint"]:
         normalized["category_hint"] = normalize_category(parsed.get("category_hint"))
     return normalized

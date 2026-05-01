@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -119,10 +120,24 @@ func (g gateway) handleMessage(evt *events.Message) {
 	if evt.Info.IsFromMe {
 		return
 	}
-
-	text := extractText(evt)
-	if text == "" {
+	if evt.Info.Chat.String() == "status@broadcast" {
 		return
+	}
+	if evt.Message == nil {
+		return
+	}
+
+	messageKind := "text"
+	text := extractText(evt)
+	image := evt.Message.GetImageMessage()
+	if text == "" && image == nil {
+		return
+	}
+	if image != nil {
+		messageKind = "image"
+		if text == "" {
+			text = image.GetCaption()
+		}
 	}
 	debugReply := reply.ShouldDebug(text, g.cfg.DebugJSONReplies)
 	parseText := reply.StripDebugPrefix(text)
@@ -145,7 +160,7 @@ func (g gateway) handleMessage(evt *events.Message) {
 		ChatID:          evt.Info.Chat.String(),
 		SenderID:        senderID,
 		MessageID:       evt.Info.ID,
-		MessageType:     "text",
+		MessageType:     messageKind,
 		Body:            parseText,
 		ProviderTime:    evt.Info.Timestamp,
 	})
@@ -163,30 +178,46 @@ func (g gateway) handleMessage(evt *events.Message) {
 		g.logger.Error("failed to load conversation context", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
 	}
 
-	parsed, err := g.inference.ParseText(ctx, inference.ParseTextRequest{
-		Source:       "whatsmeow",
-		From:         senderID,
-		MessageID:    evt.Info.ID,
-		Text:         parseText,
-		Conversation: conversationContext,
-	})
-	if err != nil {
-		g.logger.Error("failed to parse whatsmeow message", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
-		_, _ = g.client.SendMessage(ctx, evt.Info.Chat, &waProto.Message{
-			Conversation: proto.String("parse error: " + err.Error()),
+	var parsed inference.ParseTextResponse
+	if image != nil {
+		imageData, err := g.client.Download(ctx, image)
+		if err != nil {
+			g.logger.Error("failed to download whatsmeow image", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
+			return
+		}
+		parsed, err = g.inference.ParseReceipt(ctx, inference.ParseReceiptRequest{
+			Source:       "whatsmeow",
+			From:         senderID,
+			MessageID:    evt.Info.ID,
+			Caption:      parseText,
+			MimeType:     image.GetMimetype(),
+			ImageBase64:  base64.StdEncoding.EncodeToString(imageData),
+			Conversation: conversationContext,
 		})
+	} else {
+		parsed, err = g.inference.ParseText(ctx, inference.ParseTextRequest{
+			Source:       "whatsmeow",
+			From:         senderID,
+			MessageID:    evt.Info.ID,
+			Text:         parseText,
+			Conversation: conversationContext,
+		})
+	}
+	if err != nil {
+		g.logger.Error("failed to parse whatsmeow message", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "message_type", messageKind, "error", err)
 		return
 	}
 	if err := g.db.RecordParserRun(ctx, conversationKey, evt.Info.ID, parsed); err != nil {
 		g.logger.Error("failed to record parser run", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
 	}
+	if image != nil && parsed.Action == "none" {
+		g.logger.Info("ignored non-receipt image", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "conversation_key", conversationKey)
+		return
+	}
 
 	flowResult := conversation.HandleParsed(g.store, conversationKey, parsed, debugReply)
 	if flowResult.Err != nil {
 		g.logger.Error("failed to handle conversation flow", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", flowResult.Err)
-		_, _ = g.client.SendMessage(ctx, evt.Info.Chat, &waProto.Message{
-			Conversation: proto.String("database error: " + flowResult.Err.Error()),
-		})
 		return
 	}
 	replyBody := flowResult.Reply
@@ -232,6 +263,7 @@ func inferenceContext(store conversation.DraftStore, conversationKey string) (*i
 		HasPendingDraft: true,
 		State:           "pending_confirmation",
 		DraftSummary:    draftSummary(draft.Parsed),
+		ReceiptItems:    inference.ReceiptItems(draft.Parsed),
 		LastBotPrompt:   "Balas simpan/batal atau kirim koreksi.",
 	}, nil
 }

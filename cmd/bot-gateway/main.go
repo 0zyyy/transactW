@@ -259,6 +259,7 @@ func inferenceContext(store conversation.DraftStore, conversationKey string) (*i
 		HasPendingDraft: true,
 		State:           "pending_confirmation",
 		DraftSummary:    draftSummary(draft.Parsed),
+		ReceiptItems:    inference.ReceiptItems(draft.Parsed),
 		LastBotPrompt:   "Balas simpan/batal atau kirim koreksi.",
 	}, nil
 }

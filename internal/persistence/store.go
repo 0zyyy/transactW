@@ -179,7 +179,7 @@ func (s *Store) Save(conversationKey string, parsed inference.ParseTextResponse)
 		ctx,
 		`INSERT INTO transaction_drafts
 			(id, conversation_key, user_id, status, intent, type, amount, currency, transaction_date, merchant_name, description, category_hint, account_hint, confidence, raw_json, expires_at, created_at, updated_at)
-		 VALUES ($1, $2, $3, 'pending_confirmation', $4, $5, $6, $7, $8, '', $9, $10, $11, $12, $13, $14, $15, $16)`,
+		 VALUES ($1, $2, $3, 'pending_confirmation', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		draftID,
 		conversationKey,
 		userID,
@@ -188,6 +188,7 @@ func (s *Store) Save(conversationKey string, parsed inference.ParseTextResponse)
 		nullableInt64(parsed.Amount),
 		defaultCurrency(parsed.Currency),
 		nullableString(parsed.TransactionDate),
+		parsed.MerchantName,
 		parsed.Description,
 		parsed.CategoryHint,
 		parsed.AccountHint,
@@ -204,13 +205,14 @@ func (s *Store) Save(conversationKey string, parsed inference.ParseTextResponse)
 			ctx,
 			`INSERT INTO transaction_draft_items
 				(id, draft_id, type, amount, currency, transaction_date, merchant_name, description, category_hint, account_hint, sort_order, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, '', $7, $8, $9, $10, $11)`,
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 			newID("tdi"),
 			draftID,
 			item.Type,
 			item.Amount,
 			defaultCurrency(item.Currency),
 			item.TransactionDate,
+			item.MerchantName,
 			item.Description,
 			item.CategoryHint,
 			item.AccountHint,
@@ -261,7 +263,7 @@ func (s *Store) Confirm(conversationKey string) (conversation.PendingDraft, bool
 	if err != nil {
 		return conversation.PendingDraft{}, false, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT type, amount, currency, transaction_date, description, category_hint FROM transaction_draft_items WHERE draft_id = $1 ORDER BY sort_order`, draftID)
+	rows, err := tx.QueryContext(ctx, `SELECT type, amount, currency, transaction_date, merchant_name, description, category_hint FROM transaction_draft_items WHERE draft_id = $1 ORDER BY sort_order`, draftID)
 	if err != nil {
 		return conversation.PendingDraft{}, false, err
 	}
@@ -269,7 +271,7 @@ func (s *Store) Confirm(conversationKey string) (conversation.PendingDraft, bool
 	var items []inference.TransactionDraft
 	for rows.Next() {
 		var item inference.TransactionDraft
-		if err := rows.Scan(&item.Type, &item.Amount, &item.Currency, &item.TransactionDate, &item.Description, &item.CategoryHint); err != nil {
+		if err := rows.Scan(&item.Type, &item.Amount, &item.Currency, &item.TransactionDate, &item.MerchantName, &item.Description, &item.CategoryHint); err != nil {
 			rows.Close()
 			return conversation.PendingDraft{}, false, err
 		}
@@ -290,7 +292,7 @@ func (s *Store) Confirm(conversationKey string) (conversation.PendingDraft, bool
 			ctx,
 			`INSERT INTO transactions
 				(id, user_id, account_id, category_id, source_draft_id, type, amount, currency, transaction_date, merchant_name, description, source, confirmed_at, created_at, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '', $10, 'whatsapp_text', $11, $12, $13)`,
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'whatsapp_text', $12, $13, $14)`,
 			newID("txn"),
 			userID,
 			accountID,
@@ -300,6 +302,7 @@ func (s *Store) Confirm(conversationKey string) (conversation.PendingDraft, bool
 			item.Amount,
 			defaultCurrency(item.Currency),
 			item.TransactionDate,
+			item.MerchantName,
 			item.Description,
 			now,
 			now,
@@ -539,6 +542,7 @@ func draftItems(parsed inference.ParseTextResponse) []inference.TransactionDraft
 		Type:            draftType(parsed),
 		Amount:          amount,
 		Currency:        defaultCurrency(parsed.Currency),
+		MerchantName:    parsed.MerchantName,
 		Description:     parsed.Description,
 		CategoryHint:    parsed.CategoryHint,
 		AccountHint:     parsed.AccountHint,

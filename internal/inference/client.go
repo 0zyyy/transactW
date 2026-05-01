@@ -32,11 +32,22 @@ type ParseTextRequest struct {
 	Conversation *ConversationContext `json:"conversation,omitempty"`
 }
 
+type ParseReceiptRequest struct {
+	Source       string               `json:"source"`
+	From         string               `json:"from,omitempty"`
+	MessageID    string               `json:"message_id,omitempty"`
+	Caption      string               `json:"caption,omitempty"`
+	MimeType     string               `json:"mime_type"`
+	ImageBase64  string               `json:"image_base64"`
+	Conversation *ConversationContext `json:"conversation,omitempty"`
+}
+
 type ConversationContext struct {
-	HasPendingDraft bool                 `json:"has_pending_draft"`
-	DraftSummary    []DraftSummaryItem   `json:"draft_summary,omitempty"`
-	LastBotPrompt   string               `json:"last_bot_prompt,omitempty"`
-	State           string               `json:"state,omitempty"`
+	HasPendingDraft bool               `json:"has_pending_draft"`
+	DraftSummary    []DraftSummaryItem `json:"draft_summary,omitempty"`
+	ReceiptItems    []ReceiptItem      `json:"receipt_items,omitempty"`
+	LastBotPrompt   string             `json:"last_bot_prompt,omitempty"`
+	State           string             `json:"state,omitempty"`
 }
 
 type DraftSummaryItem struct {
@@ -57,6 +68,7 @@ type ParseTextResponse struct {
 	IntentCandidates    []IntentCandidate  `json:"intent_candidates"`
 	Amount              *int64             `json:"amount"`
 	Currency            string             `json:"currency"`
+	MerchantName        string             `json:"merchant_name"`
 	Description         string             `json:"description"`
 	CategoryHint        string             `json:"category_hint"`
 	AccountHint         string             `json:"account_hint"`
@@ -70,12 +82,12 @@ type ParseTextResponse struct {
 }
 
 type EditDraft struct {
-	TargetItemIndex *int    `json:"target_item_index,omitempty"`
-	Field           string  `json:"field"`
-	Value           any     `json:"value,omitempty"`
-	Amount          *int64  `json:"amount,omitempty"`
-	CategoryHint    string  `json:"category_hint,omitempty"`
-	Description     string  `json:"description,omitempty"`
+	TargetItemIndex *int   `json:"target_item_index,omitempty"`
+	Field           string `json:"field"`
+	Value           any    `json:"value,omitempty"`
+	Amount          *int64 `json:"amount,omitempty"`
+	CategoryHint    string `json:"category_hint,omitempty"`
+	Description     string `json:"description,omitempty"`
 }
 
 type IntentCandidate struct {
@@ -89,6 +101,7 @@ type TransactionDraft struct {
 	Type            string `json:"type"`
 	Amount          int64  `json:"amount"`
 	Currency        string `json:"currency"`
+	MerchantName    string `json:"merchant_name"`
 	Description     string `json:"description"`
 	CategoryHint    string `json:"category_hint"`
 	AccountHint     string `json:"account_hint"`
@@ -112,12 +125,20 @@ type DateRange struct {
 }
 
 func (c Client) ParseText(ctx context.Context, req ParseTextRequest) (ParseTextResponse, error) {
+	return c.parse(ctx, "/v1/parse/text", req)
+}
+
+func (c Client) ParseReceipt(ctx context.Context, req ParseReceiptRequest) (ParseTextResponse, error) {
+	return c.parse(ctx, "/v1/parse/receipt", req)
+}
+
+func (c Client) parse(ctx context.Context, path string, req any) (ParseTextResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return ParseTextResponse{}, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/parse/text", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return ParseTextResponse{}, err
 	}

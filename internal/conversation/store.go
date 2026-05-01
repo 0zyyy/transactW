@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -19,6 +20,25 @@ type DraftStore interface {
 	Get(conversationKey string) (PendingDraft, bool, error)
 	Confirm(conversationKey string) (PendingDraft, bool, error)
 	Cancel(conversationKey string) (bool, error)
+	RunQuery(conversationKey string, query inference.QueryDraft) (QueryResult, error)
+}
+
+type QueryResult struct {
+	Metric       string
+	Type         string
+	StartDate    string
+	EndDate      string
+	Total        int64
+	Transactions []QueryTransaction
+}
+
+type QueryTransaction struct {
+	Type            string
+	Amount          int64
+	Currency        string
+	TransactionDate string
+	Description     string
+	CategoryName    string
 }
 
 type Store struct {
@@ -85,6 +105,10 @@ func (s *Store) Cancel(conversationKey string) (bool, error) {
 	_, ok := s.drafts[conversationKey]
 	delete(s.drafts, conversationKey)
 	return ok, nil
+}
+
+func (s *Store) RunQuery(conversationKey string, query inference.QueryDraft) (QueryResult, error) {
+	return QueryResult{}, errors.New("query execution is not available for in-memory draft store")
 }
 
 func (s *Store) cleanupLocked(now time.Time) {
