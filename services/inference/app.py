@@ -1528,6 +1528,11 @@ def normalize_edit(parsed: dict[str, Any]) -> dict[str, Any] | None:
         "description": str(edit.get("description") or ""),
     }
     target = edit.get("target_item_index")
+    try:
+        if target not in (None, "") and int(target) <= 0:
+            target = None
+    except (TypeError, ValueError):
+        target = None
     if target in (None, ""):
         target = inferred_edit_target(parsed)
     if target not in (None, ""):
@@ -1560,16 +1565,21 @@ def inferred_edit_field(parsed: dict[str, Any]) -> str:
 def inferred_edit_target(parsed: dict[str, Any]) -> int | None:
     source = str(parsed.get("_source_text") or parsed.get("description") or "").lower()
     ordinals = {
+        "satu": 1,
         "pertama": 1,
+        "dua": 2,
         "kedua": 2,
+        "tiga": 3,
         "ketiga": 3,
+        "empat": 4,
         "keempat": 4,
+        "lima": 5,
         "kelima": 5,
     }
     for word, index in ordinals.items():
-        if re.search(rf"\b(?:yang\s+)?{word}\b", source):
+        if re.search(rf"\b(?:(?:yang|yg|nomor|no|item)\s+)?{word}\b", source):
             return index
-    match = re.search(r"\b(?:item|nomor|no)\s*(\d{1,2})\b", source)
+    match = re.search(r"\b(?:item|nomor|no|yang|yg)?\s*(\d{1,2})\s+(?:harusnya|hrsnya|harunsya|jadi|diganti|ganti)\b", source)
     if match:
         return int(match.group(1))
     return None
