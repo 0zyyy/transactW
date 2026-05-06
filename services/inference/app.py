@@ -321,14 +321,26 @@ def route_parse(text: str, conversation: Any = None) -> dict[str, Any]:
 
 
 def route_parse_receipt(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> dict[str, Any]:
+    if GEMINI_API_KEY:
+        try:
+            return route_parse_receipt_with_gemini_vision(image_base64, mime_type, caption, "gemini_vision_primary")
+        except Exception as exc:
+            if OCR_ENGINE != "doctr":
+                return receipt_ocr_clarification(caption, f"gemini_vision_error:{exc}")
+            return route_parse_receipt_with_doctr(image_base64, caption, f"gemini_vision_error:{exc}", allow_gemini_fallback=False)
+
     if OCR_ENGINE != "doctr":
         return route_parse_receipt_with_gemini_vision(image_base64, mime_type, caption, "ocr_engine_not_doctr")
 
+    return route_parse_receipt_with_doctr(image_base64, caption, "doctr_primary", allow_gemini_fallback=True)
+
+
+def route_parse_receipt_with_doctr(image_base64: str, caption: str, reason: str, allow_gemini_fallback: bool) -> dict[str, Any]:
     try:
         ocr_result = extract_text_with_doctr(image_base64)
     except OCRError as exc:
-        if OCR_ALLOW_GEMINI_VISION_FALLBACK:
-            return route_parse_receipt_with_gemini_vision(image_base64, mime_type, caption, f"doctr_error:{exc}")
+        if allow_gemini_fallback and OCR_ALLOW_GEMINI_VISION_FALLBACK:
+            return route_parse_receipt_with_gemini_vision(image_base64, "image/jpeg", caption, f"doctr_error:{exc}")
         return receipt_ocr_clarification(caption, f"doctr_error:{exc}")
 
     candidates = extract_receipt_candidates(ocr_result)
@@ -336,6 +348,8 @@ def route_parse_receipt(image_base64: str, mime_type: str, caption: str, convers
         ocr = ocr_candidates_to_receipt_ocr(candidates)
         parsed = normalize_receipt_ocr(ocr, caption)
         parsed["raw"] = receipt_raw("doctr", caption, ocr_result, candidates, None, ocr, "not_receipt_candidate")
+        if reason:
+            parsed["raw"]["fallback_reason"] = reason + ":not_receipt_candidate"
         return parsed
 
     verifier = None
@@ -347,8 +361,8 @@ def route_parse_receipt(image_base64: str, mime_type: str, caption: str, convers
 
     ocr = ocr_candidates_to_receipt_ocr(candidates, verifier if verifier and "error" not in verifier else None)
     parsed = normalize_receipt_ocr(ocr, caption)
-    provider = "doctr_gemini_verifier" if verifier else "doctr"
-    parsed["raw"] = receipt_raw(provider, caption, ocr_result, candidates, verifier, ocr, "receipt_ocr")
+    provider = "doctr_gemini_verifier" if verifier and "error" not in verifier else "doctr"
+    parsed["raw"] = receipt_raw(provider, caption, ocr_result, candidates, verifier, ocr, reason if reason else "receipt_ocr")
     return parsed
 
 

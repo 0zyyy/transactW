@@ -198,6 +198,8 @@ def check_case(case: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
 def routing_cases(parser: Any) -> list[dict[str, Any]]:
     previous_key = parser.GEMINI_API_KEY
     previous_parse_with_gemini = parser.parse_with_gemini
+    previous_parse_receipt_with_gemini = parser.parse_receipt_with_gemini
+    previous_extract_text_with_doctr = parser.extract_text_with_doctr
     cases: list[dict[str, Any]] = []
     try:
         parser.GEMINI_API_KEY = "test-key"
@@ -251,9 +253,74 @@ def routing_cases(parser: Any) -> list[dict[str, Any]]:
                 },
             }
         )
+
+        def fake_parse_receipt_with_gemini(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> dict[str, Any]:
+            return {
+                "is_receipt": True,
+                "receipt_confidence": 0.95,
+                "merchant": "Vision Store",
+                "date": "2026-04-27",
+                "currency": "IDR",
+                "totals": [{"label": "grand total", "amount": 46200, "confidence": 0.95}],
+                "line_items": [],
+                "payment_method": "QRIS",
+                "notes": "",
+            }
+
+        def fail_extract_text_with_doctr(image_base64: str) -> dict[str, Any]:
+            raise AssertionError("Gemini-enabled receipt routing should not call docTR first")
+
+        parser.parse_receipt_with_gemini = fake_parse_receipt_with_gemini
+        parser.extract_text_with_doctr = fail_extract_text_with_doctr
+        cases.append(
+            {
+                "name": "routing uses gemini vision first for receipts when enabled",
+                "input": "receipt image",
+                "parsed": parser.route_parse_receipt("image", "image/jpeg", ""),
+                "expect": {
+                    "intent": "create_expense",
+                    "action": "create_draft",
+                    "amount": 46200,
+                    "gemini_called": True,
+                    "raw_provider": "gemini_vision",
+                },
+            }
+        )
+
+        def fail_parse_receipt_with_gemini(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> dict[str, Any]:
+            raise RuntimeError("vision unavailable")
+
+        def fake_extract_text_with_doctr(image_base64: str) -> dict[str, Any]:
+            return {
+                "engine": "doctr",
+                "confidence": 0.9,
+                "lines": [
+                    {"text": "Fallback Store", "confidence": 0.9},
+                    {"text": "Total :", "confidence": 0.98},
+                    {"text": "Rp46.200", "confidence": 0.95},
+                ],
+            }
+
+        parser.parse_receipt_with_gemini = fail_parse_receipt_with_gemini
+        parser.extract_text_with_doctr = fake_extract_text_with_doctr
+        cases.append(
+            {
+                "name": "routing falls back to doctr when gemini vision fails",
+                "input": "receipt image fallback",
+                "parsed": parser.route_parse_receipt("image", "image/jpeg", ""),
+                "expect": {
+                    "intent": "create_expense",
+                    "action": "create_draft",
+                    "amount": 46200,
+                    "raw_provider": "doctr",
+                },
+            }
+        )
     finally:
         parser.GEMINI_API_KEY = previous_key
         parser.parse_with_gemini = previous_parse_with_gemini
+        parser.parse_receipt_with_gemini = previous_parse_receipt_with_gemini
+        parser.extract_text_with_doctr = previous_extract_text_with_doctr
     return cases
 
 
