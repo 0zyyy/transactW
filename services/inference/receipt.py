@@ -221,4 +221,6 @@ def infer_receipt_category(ocr: dict[str, Any]) -> str:
         return "Belanja Harian"
     if any(word in text for word in ["grab", "gojek", "taxi", "parkir", "tol", "pertamina", "shell", "spbu"]):
         return "Transport"
+    if any(word in text for word in ["bioskop", "cinema", "movie", "film", "konser", "karaoke", "netflix", "spotify", "game"]):
+        return "Hiburan"
     return "Lainnya"

@@ -95,6 +95,9 @@ def check_case(case: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
         assert_equal("category_hint", parsed.get("category_hint"), expect["category_hint"])
     if "transaction_count" in expect:
         assert_equal("transaction_count", len(parsed.get("transactions") or []), expect["transaction_count"])
+    if "transaction_category_hints" in expect:
+        actual = [item.get("category_hint") for item in parsed.get("transactions") or []]
+        assert_equal("transaction.category_hints", actual, expect["transaction_category_hints"])
     edit = parsed.get("edit") or {}
     if "edit_field" in expect:
         assert_equal("edit.field", edit.get("field"), expect["edit_field"])
@@ -560,6 +563,25 @@ def receipt_cases() -> list[dict[str, Any]]:
                 "amount": 42000,
                 "needs_confirmation": True,
                 "top_needs_clarification": False,
+            },
+        },
+        {
+            "name": "bioskop receipt category is hiburan",
+            "input": "bioskop receipt image",
+            "ocr": {
+                "lines": [
+                    {"text": "BIOSKOP XXI", "confidence": 0.96},
+                    {"text": "TIKET BIOSKOP 50.000", "confidence": 0.93},
+                    {"text": "TOTAL BAYAR", "confidence": 0.94},
+                    {"text": "50.000", "confidence": 0.94},
+                ]
+            },
+            "expect": {
+                "intent": "create_expense",
+                "action": "create_draft",
+                "amount": 50000,
+                "category_hint": "Hiburan",
+                "needs_confirmation": True,
             },
         },
     ]

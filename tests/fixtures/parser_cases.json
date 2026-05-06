@@ -502,6 +502,19 @@
       "needs_confirmation": true,
       "amount": 140000,
       "transaction_count": 2,
+      "transaction_category_hints": ["Hiburan", "Makan & Minum"],
+      "gemini_called": false
+    }
+  },
+  {
+    "name": "bioskop expense category",
+    "input": "bioskop 40k",
+    "expect": {
+      "intent": "create_expense",
+      "action": "create_draft",
+      "needs_confirmation": true,
+      "amount": 40000,
+      "category_hint": "Hiburan",
       "gemini_called": false
     }
   },

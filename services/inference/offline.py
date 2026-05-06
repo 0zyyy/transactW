@@ -65,6 +65,7 @@ def infer_category(text: str) -> str:
         ("Transport", ["gojek", "grab", "taxi", "bensin", "parkir", "tol", "transport"]),
         ("Belanja Harian", ["indomaret", "alfamart", "superindo", "snack", "sabun", "belanja"]),
         ("Tagihan", ["listrik", "internet", "pulsa", "paket data", "air", "tagihan"]),
+        ("Hiburan", ["bioskop", "cinema", "movie", "film", "konser", "karaoke", "netflix", "spotify", "game"]),
         ("Income", ["gaji", "freelance", "income", "bayaran", "dibayar"]),
     ]
     for category, keywords in categories:
