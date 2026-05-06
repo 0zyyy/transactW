@@ -47,6 +47,20 @@ type OutboundMessage struct {
 	Body            string
 }
 
+type ReceiptUpload struct {
+	ID                string
+	UserID            string
+	ConversationKey   string
+	ProviderMessageID string
+	ImageHash         string
+	MimeType          string
+	DraftID           string
+	TransactionID     string
+	Status            string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
 func Open(ctx context.Context, dsn string, ttl time.Duration) (*Store, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -153,6 +167,111 @@ func (s *Store) RecordParserRun(ctx context.Context, conversationKey, providerMe
 	return err
 }
 
+func (s *Store) StartReceiptProcessing(ctx context.Context, conversationKey, providerMessageID, imageHash, mimeType string) (ReceiptUpload, bool, error) {
+	if strings.TrimSpace(imageHash) == "" {
+		return ReceiptUpload{}, false, errors.New("image hash is required")
+	}
+	userID, err := s.userIDForConversation(ctx, conversationKey)
+	if err != nil {
+		return ReceiptUpload{}, false, err
+	}
+	now := time.Now().UTC()
+	receiptID := stableID("rcp", userID+":"+imageHash)
+	result, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO receipt_uploads
+			(id, user_id, conversation_key, provider_message_id, image_hash, mime_type, status, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, 'processing', $7, $8)
+		 ON CONFLICT (user_id, image_hash) DO NOTHING`,
+		receiptID,
+		userID,
+		conversationKey,
+		nullableString(providerMessageID),
+		imageHash,
+		mimeType,
+		now,
+		now,
+	)
+	if err != nil {
+		return ReceiptUpload{}, false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return ReceiptUpload{}, false, err
+	}
+	if affected > 0 {
+		return ReceiptUpload{ID: receiptID, UserID: userID, ConversationKey: conversationKey, ProviderMessageID: providerMessageID, ImageHash: imageHash, MimeType: mimeType, Status: "processing", CreatedAt: now, UpdatedAt: now}, false, nil
+	}
+
+	existing, err := s.receiptByUserHash(ctx, userID, imageHash)
+	if err != nil {
+		return ReceiptUpload{}, false, err
+	}
+	switch existing.Status {
+	case "failed", "cancelled":
+		_, err := s.db.ExecContext(
+			ctx,
+			`UPDATE receipt_uploads
+			 SET conversation_key = $1, provider_message_id = $2, mime_type = $3, status = 'processing', updated_at = $4
+			 WHERE id = $5`,
+			conversationKey,
+			nullableString(providerMessageID),
+			mimeType,
+			now,
+			existing.ID,
+		)
+		if err != nil {
+			return ReceiptUpload{}, false, err
+		}
+		existing.ConversationKey = conversationKey
+		existing.ProviderMessageID = providerMessageID
+		existing.MimeType = mimeType
+		existing.Status = "processing"
+		existing.UpdatedAt = now
+		return existing, false, nil
+	default:
+		return existing, true, nil
+	}
+}
+
+func (s *Store) MarkReceiptFailed(ctx context.Context, conversationKey, imageHash string) error {
+	userID, err := s.userIDForConversation(ctx, conversationKey)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(
+		ctx,
+		`UPDATE receipt_uploads SET status = 'failed', updated_at = $1 WHERE user_id = $2 AND image_hash = $3 AND status = 'processing'`,
+		time.Now().UTC(),
+		userID,
+		imageHash,
+	)
+	return err
+}
+
+func (s *Store) receiptByUserHash(ctx context.Context, userID, imageHash string) (ReceiptUpload, error) {
+	var receipt ReceiptUpload
+	var providerMessageID sql.NullString
+	var mimeType sql.NullString
+	var draftID sql.NullString
+	var transactionID sql.NullString
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, user_id, conversation_key, provider_message_id, image_hash, mime_type, draft_id, transaction_id, status, created_at, updated_at
+		 FROM receipt_uploads WHERE user_id = $1 AND image_hash = $2`,
+		userID,
+		imageHash,
+	).Scan(&receipt.ID, &receipt.UserID, &receipt.ConversationKey, &providerMessageID, &receipt.ImageHash, &mimeType, &draftID, &transactionID, &receipt.Status, &receipt.CreatedAt, &receipt.UpdatedAt)
+	if err != nil {
+		return ReceiptUpload{}, err
+	}
+	receipt.ProviderMessageID = providerMessageID.String
+	receipt.MimeType = mimeType.String
+	receipt.DraftID = draftID.String
+	receipt.TransactionID = transactionID.String
+	return receipt, nil
+}
+
 func (s *Store) Save(conversationKey string, parsed inference.ParseTextResponse) (conversation.PendingDraft, error) {
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -222,6 +341,21 @@ func (s *Store) Save(conversationKey string, parsed inference.ParseTextResponse)
 			return conversation.PendingDraft{}, err
 		}
 	}
+	if imageHash := receiptImageHash(parsed); imageHash != "" {
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE receipt_uploads
+			 SET draft_id = $1, status = 'pending_confirmation', parsed_json = $2, updated_at = $3
+			 WHERE user_id = $4 AND image_hash = $5 AND status = 'processing'`,
+			draftID,
+			string(raw),
+			now,
+			userID,
+			imageHash,
+		); err != nil {
+			return conversation.PendingDraft{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return conversation.PendingDraft{}, err
 	}
@@ -283,7 +417,9 @@ func (s *Store) Confirm(conversationKey string) (conversation.PendingDraft, bool
 	}
 	rows.Close()
 
+	var firstTransactionID string
 	for _, item := range items {
+		transactionID := newID("txn")
 		categoryID, err := categoryIDFor(ctx, tx, item.CategoryHint)
 		if err != nil {
 			return conversation.PendingDraft{}, false, err
@@ -293,7 +429,7 @@ func (s *Store) Confirm(conversationKey string) (conversation.PendingDraft, bool
 			`INSERT INTO transactions
 				(id, user_id, account_id, category_id, source_draft_id, type, amount, currency, transaction_date, merchant_name, description, source, confirmed_at, created_at, updated_at)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'whatsapp_text', $12, $13, $14)`,
-			newID("txn"),
+			transactionID,
 			userID,
 			accountID,
 			categoryID,
@@ -310,8 +446,14 @@ func (s *Store) Confirm(conversationKey string) (conversation.PendingDraft, bool
 		); err != nil {
 			return conversation.PendingDraft{}, false, err
 		}
+		if firstTransactionID == "" {
+			firstTransactionID = transactionID
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE transaction_drafts SET status = 'confirmed', confirmed_at = $1, updated_at = $2 WHERE id = $3`, now, now, draftID); err != nil {
+		return conversation.PendingDraft{}, false, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE receipt_uploads SET status = 'confirmed', transaction_id = $1, updated_at = $2 WHERE draft_id = $3`, nullableString(firstTransactionID), now, draftID); err != nil {
 		return conversation.PendingDraft{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -322,7 +464,12 @@ func (s *Store) Confirm(conversationKey string) (conversation.PendingDraft, bool
 
 func (s *Store) Cancel(conversationKey string) (bool, error) {
 	now := time.Now().UTC()
-	result, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer rollbackUnlessDone(tx)
+	result, err := tx.Exec(
 		`UPDATE transaction_drafts SET status = 'cancelled', cancelled_at = $1, updated_at = $2 WHERE conversation_key = $3 AND status = 'pending_confirmation' AND expires_at > $4`,
 		now,
 		now,
@@ -333,7 +480,15 @@ func (s *Store) Cancel(conversationKey string) (bool, error) {
 		return false, err
 	}
 	affected, err := result.RowsAffected()
-	return affected > 0, err
+	if err != nil {
+		return false, err
+	}
+	if affected > 0 {
+		if _, err := tx.Exec(`UPDATE receipt_uploads SET status = 'cancelled', updated_at = $1 WHERE conversation_key = $2 AND status = 'pending_confirmation'`, now, conversationKey); err != nil {
+			return false, err
+		}
+	}
+	return affected > 0, tx.Commit()
 }
 
 func loadPendingDraft(ctx context.Context, tx *sql.Tx, conversationKey string, now time.Time) (conversation.PendingDraft, string, string, bool, error) {
@@ -521,6 +676,16 @@ func sourceText(parsed inference.ParseTextResponse) string {
 		return value
 	}
 	return parsed.Description
+}
+
+func receiptImageHash(parsed inference.ParseTextResponse) string {
+	if parsed.Raw == nil {
+		return ""
+	}
+	if value, ok := parsed.Raw["image_hash"].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
 }
 
 func draftType(parsed inference.ParseTextResponse) string {

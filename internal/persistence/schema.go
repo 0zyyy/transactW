@@ -153,7 +153,23 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at TIMESTAMPTZ NOT NULL,
 			updated_at TIMESTAMPTZ NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS receipt_uploads (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL REFERENCES users(id),
+			conversation_key TEXT NOT NULL REFERENCES whatsapp_conversations(conversation_key),
+			provider_message_id TEXT,
+			image_hash TEXT NOT NULL,
+			mime_type TEXT,
+			draft_id TEXT REFERENCES transaction_drafts(id),
+			transaction_id TEXT REFERENCES transactions(id),
+			status TEXT NOT NULL,
+			parsed_json JSONB,
+			created_at TIMESTAMPTZ NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL,
+			UNIQUE (user_id, image_hash)
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions (user_id, transaction_date DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_receipt_uploads_conversation_status ON receipt_uploads (conversation_key, status, updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_whatsapp_identities_user ON whatsapp_identities (user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_conversation_created ON whatsapp_messages (conversation_key, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_transaction_drafts_conversation_status ON transaction_drafts (conversation_key, status, expires_at)`,

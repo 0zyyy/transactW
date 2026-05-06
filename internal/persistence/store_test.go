@@ -509,6 +509,152 @@ func TestStoreRunQueryTotalsAndTransactionList(t *testing.T) {
 	}
 }
 
+func TestReceiptUploadHashDedupeSameUser(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	store, err := Open(ctx, dsn, 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	suffix := time.Now().UnixNano()
+	stamp := time.Unix(0, suffix).Format("150405.000000000")
+	conversationKey := "whatsmeow:test:receipt-dedupe-" + stamp + "@s.whatsapp.net"
+	inbound := InboundMessage{
+		Provider:        "whatsmeow",
+		SessionName:     "test",
+		ConversationKey: conversationKey,
+		ChatID:          "receipt-dedupe@s.whatsapp.net",
+		SenderID:        "receipt-dedupe@s.whatsapp.net",
+		MessageID:       "wamid.receipt-dedupe." + stamp,
+		MessageType:     "image",
+		Body:            "",
+	}
+	if _, err := store.RecordInbound(ctx, inbound); err != nil {
+		t.Fatal(err)
+	}
+
+	imageHash := "hash-" + stamp
+	receipt, duplicate, err := store.StartReceiptProcessing(ctx, conversationKey, inbound.MessageID, imageHash, "image/jpeg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate {
+		t.Fatal("first receipt upload should not be duplicate")
+	}
+	if receipt.Status != "processing" {
+		t.Fatalf("status = %q, want processing", receipt.Status)
+	}
+
+	amount := int64(50000)
+	parsed := inference.ParseTextResponse{
+		Intent:          "create_expense",
+		Action:          "create_draft",
+		Amount:          &amount,
+		Currency:        "IDR",
+		Description:     "receipt dedupe test " + stamp,
+		CategoryHint:    "Hiburan",
+		TransactionDate: "2026-04-29",
+		Confidence:      0.9,
+		Raw:             map[string]any{"image_hash": imageHash},
+	}
+	if _, err := store.Save(conversationKey, parsed); err != nil {
+		t.Fatal(err)
+	}
+
+	receipt, duplicate, err = store.StartReceiptProcessing(ctx, conversationKey, "wamid.receipt-dedupe.repeat."+stamp, imageHash, "image/jpeg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !duplicate {
+		t.Fatal("second same-user receipt upload should be duplicate")
+	}
+	if receipt.Status != "pending_confirmation" {
+		t.Fatalf("duplicate status = %q, want pending_confirmation", receipt.Status)
+	}
+
+	if _, ok, err := store.Confirm(conversationKey); err != nil {
+		t.Fatal(err)
+	} else if !ok {
+		t.Fatal("expected pending receipt draft")
+	}
+	receipt, duplicate, err = store.StartReceiptProcessing(ctx, conversationKey, "wamid.receipt-dedupe.confirmed."+stamp, imageHash, "image/jpeg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !duplicate {
+		t.Fatal("confirmed same-user receipt upload should be duplicate")
+	}
+	if receipt.Status != "confirmed" {
+		t.Fatalf("duplicate status = %q, want confirmed", receipt.Status)
+	}
+}
+
+func TestReceiptUploadHashAllowsDifferentUsersAndFailedRetry(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	store, err := Open(ctx, dsn, 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	suffix := time.Now().UnixNano()
+	stamp := time.Unix(0, suffix).Format("150405.000000000")
+	imageHash := "shared-hash-" + stamp
+	firstConversation := "whatsmeow:test:receipt-user-one-" + stamp + "@s.whatsapp.net"
+	secondConversation := "whatsmeow:test:receipt-user-two-" + stamp + "@s.whatsapp.net"
+
+	for _, item := range []struct {
+		conversationKey string
+		senderID        string
+		messageID       string
+	}{
+		{firstConversation, "receipt-user-one-" + stamp + "@s.whatsapp.net", "wamid.receipt-user-one." + stamp},
+		{secondConversation, "receipt-user-two-" + stamp + "@s.whatsapp.net", "wamid.receipt-user-two." + stamp},
+	} {
+		if _, err := store.RecordInbound(ctx, InboundMessage{
+			Provider:        "whatsmeow",
+			SessionName:     "test",
+			ConversationKey: item.conversationKey,
+			ChatID:          item.senderID,
+			SenderID:        item.senderID,
+			MessageID:       item.messageID,
+			MessageType:     "image",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, duplicate, err := store.StartReceiptProcessing(ctx, firstConversation, "wamid.first."+stamp, imageHash, "image/jpeg"); err != nil {
+		t.Fatal(err)
+	} else if duplicate {
+		t.Fatal("first user receipt should not be duplicate")
+	}
+	if err := store.MarkReceiptFailed(ctx, firstConversation, imageHash); err != nil {
+		t.Fatal(err)
+	}
+	if receipt, duplicate, err := store.StartReceiptProcessing(ctx, firstConversation, "wamid.first.retry."+stamp, imageHash, "image/jpeg"); err != nil {
+		t.Fatal(err)
+	} else if duplicate {
+		t.Fatal("failed receipt should be allowed to retry")
+	} else if receipt.Status != "processing" {
+		t.Fatalf("retry status = %q, want processing", receipt.Status)
+	}
+	if _, duplicate, err := store.StartReceiptProcessing(ctx, secondConversation, "wamid.second."+stamp, imageHash, "image/jpeg"); err != nil {
+		t.Fatal(err)
+	} else if duplicate {
+		t.Fatal("same hash from different user should not be duplicate")
+	}
+}
+
 func ptrInt64ForTest(value int64) *int64 {
 	return &value
 }

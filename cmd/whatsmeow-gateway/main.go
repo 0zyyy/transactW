@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -179,10 +181,36 @@ func (g gateway) handleMessage(evt *events.Message) {
 	}
 
 	var parsed inference.ParseTextResponse
+	imageHash := ""
 	if image != nil {
 		imageData, err := g.client.Download(ctx, image)
 		if err != nil {
 			g.logger.Error("failed to download whatsmeow image", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
+			return
+		}
+		imageHash = hashBytes(imageData)
+		receiptUpload, duplicateReceipt, err := g.db.StartReceiptProcessing(ctx, conversationKey, evt.Info.ID, imageHash, image.GetMimetype())
+		if err != nil {
+			g.logger.Error("failed to check receipt duplicate", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
+			return
+		}
+		if duplicateReceipt {
+			replyBody := duplicateReceiptReply(receiptUpload)
+			_, err = g.client.SendMessage(ctx, evt.Info.Chat, &waProto.Message{Conversation: proto.String(replyBody)})
+			if err != nil {
+				g.logger.Error("failed to send duplicate receipt reply", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
+				return
+			}
+			if err := g.db.RecordOutbound(ctx, persistence.OutboundMessage{
+				Provider:        "whatsmeow",
+				SessionName:     getenv("WHATSMEOW_SESSION_NAME", "default"),
+				ConversationKey: conversationKey,
+				ChatID:          evt.Info.Chat.String(),
+				Body:            replyBody,
+			}); err != nil {
+				g.logger.Error("failed to record duplicate receipt outbound message", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
+			}
+			g.logger.Info("skipped duplicate receipt image", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "receipt_status", receiptUpload.Status, "image_hash", imageHash)
 			return
 		}
 		parsed, err = g.inference.ParseReceipt(ctx, inference.ParseReceiptRequest{
@@ -205,19 +233,43 @@ func (g gateway) handleMessage(evt *events.Message) {
 	}
 	if err != nil {
 		g.logger.Error("failed to parse whatsmeow message", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "message_type", messageKind, "error", err)
+		if imageHash != "" {
+			if markErr := g.db.MarkReceiptFailed(ctx, conversationKey, imageHash); markErr != nil {
+				g.logger.Error("failed to mark receipt parse failure", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", markErr)
+			}
+		}
 		return
+	}
+	if imageHash != "" {
+		if parsed.Raw == nil {
+			parsed.Raw = map[string]any{}
+		}
+		parsed.Raw["image_hash"] = imageHash
 	}
 	if err := g.db.RecordParserRun(ctx, conversationKey, evt.Info.ID, parsed); err != nil {
 		g.logger.Error("failed to record parser run", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
 	}
 	if image != nil && parsed.Action == "none" {
 		g.logger.Info("ignored non-receipt image", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "conversation_key", conversationKey)
+		if err := g.db.MarkReceiptFailed(ctx, conversationKey, imageHash); err != nil {
+			g.logger.Error("failed to mark ignored receipt", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
+		}
 		return
+	}
+	if image != nil && parsed.Action != "create_draft" {
+		if err := g.db.MarkReceiptFailed(ctx, conversationKey, imageHash); err != nil {
+			g.logger.Error("failed to mark unresolved receipt", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "action", parsed.Action, "error", err)
+		}
 	}
 
 	flowResult := conversation.HandleParsed(g.store, conversationKey, parsed, debugReply)
 	if flowResult.Err != nil {
 		g.logger.Error("failed to handle conversation flow", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", flowResult.Err)
+		if imageHash != "" {
+			if markErr := g.db.MarkReceiptFailed(ctx, conversationKey, imageHash); markErr != nil {
+				g.logger.Error("failed to mark receipt flow failure", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", markErr)
+			}
+		}
 		return
 	}
 	replyBody := flowResult.Reply
@@ -303,6 +355,24 @@ func draftType(intent string) string {
 		return "multiple"
 	default:
 		return "expense"
+	}
+}
+
+func hashBytes(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func duplicateReceiptReply(receipt persistence.ReceiptUpload) string {
+	switch receipt.Status {
+	case "confirmed":
+		return "Struk ini sudah pernah disimpan."
+	case "pending_confirmation":
+		return "Struk ini sudah jadi draft sebelumnya. Balas `simpan` untuk simpan atau `batal` untuk batalkan."
+	case "processing":
+		return "Struk ini sedang diproses. Tunggu sebentar ya."
+	default:
+		return "Struk ini sudah pernah dikirim sebelumnya."
 	}
 }
 
