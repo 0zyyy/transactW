@@ -375,10 +375,10 @@ def receipt_ocr_clarification(caption: str, reason: str) -> dict[str, Any]:
         {
             "intent": "unknown",
             "action": "ask_clarification",
-            "reply_draft": "OCR struk lagi bermasalah.",
+            "reply_draft": "Struknya belum kebaca jelas.",
             "needs_confirmation": False,
             "needs_clarification": True,
-            "clarification_prompt": "OCR struk lagi bermasalah. Kirim foto yang lebih jelas atau tulis totalnya sebagai teks dulu ya.",
+            "clarification_prompt": "Struknya belum kebaca jelas. Kirim foto yang lebih jelas atau lebih dekat, atau tulis totalnya sebagai teks dulu ya.",
             "intent_candidates": [
                 {
                     "intent": "create_expense",

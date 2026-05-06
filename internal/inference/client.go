@@ -158,5 +158,30 @@ func (c Client) parse(ctx context.Context, path string, req any) (ParseTextRespo
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return ParseTextResponse{}, err
 	}
+	sanitizeParseTextResponse(&parsed)
 	return parsed, nil
+}
+
+func sanitizeParseTextResponse(parsed *ParseTextResponse) {
+	if parsed == nil {
+		return
+	}
+	if strings.TrimSpace(parsed.Intent) == "" {
+		parsed.Intent = "unknown"
+	}
+	if strings.TrimSpace(parsed.Action) == "" {
+		parsed.Action = "none"
+	}
+	if strings.TrimSpace(parsed.Currency) == "" {
+		parsed.Currency = "IDR"
+	}
+	if parsed.IntentCandidates == nil {
+		parsed.IntentCandidates = []IntentCandidate{}
+	}
+	if parsed.Transactions == nil {
+		parsed.Transactions = []TransactionDraft{}
+	}
+	if parsed.MissingFields == nil {
+		parsed.MissingFields = []string{}
+	}
 }

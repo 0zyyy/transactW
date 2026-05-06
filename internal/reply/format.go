@@ -147,6 +147,9 @@ func formatUnknown(parsed inference.ParseTextResponse) string {
 	if len(parsed.MissingFields) > 0 {
 		return "Aku belum bisa baca transaksi ini. Field yang kurang: " + strings.Join(parsed.MissingFields, ", ")
 	}
+	if strings.TrimSpace(parsed.Intent) == "" || parsed.Intent == "unknown" {
+		return "Aku belum yakin maksudnya apa. Bisa tulis lagi lebih jelas?"
+	}
 	return fmt.Sprintf("Aku belum yakin maksudnya apa. Intent terbaca: `%s`.", parsed.Intent)
 }
 

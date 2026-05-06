@@ -251,6 +251,21 @@ func (g gateway) handleMessage(evt *events.Message) {
 	}
 	if image != nil && parsed.Action == "none" {
 		g.logger.Info("ignored non-receipt image", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "conversation_key", conversationKey)
+		replyBody := unreadableReceiptReply()
+		_, err = g.client.SendMessage(ctx, evt.Info.Chat, &waProto.Message{Conversation: proto.String(replyBody)})
+		if err != nil {
+			g.logger.Error("failed to send unreadable receipt reply", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
+			return
+		}
+		if err := g.db.RecordOutbound(ctx, persistence.OutboundMessage{
+			Provider:        "whatsmeow",
+			SessionName:     getenv("WHATSMEOW_SESSION_NAME", "default"),
+			ConversationKey: conversationKey,
+			ChatID:          evt.Info.Chat.String(),
+			Body:            replyBody,
+		}); err != nil {
+			g.logger.Error("failed to record unreadable receipt outbound message", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
+		}
 		if err := g.db.MarkReceiptFailed(ctx, conversationKey, imageHash); err != nil {
 			g.logger.Error("failed to mark ignored receipt", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
 		}
@@ -374,6 +389,10 @@ func duplicateReceiptReply(receipt persistence.ReceiptUpload) string {
 	default:
 		return "Struk ini sudah pernah dikirim sebelumnya."
 	}
+}
+
+func unreadableReceiptReply() string {
+	return "Struknya belum kebaca jelas. Kirim foto yang lebih jelas atau lebih dekat ya."
 }
 
 func extractText(evt *events.Message) string {
