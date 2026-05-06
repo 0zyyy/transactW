@@ -455,6 +455,19 @@
     }
   },
   {
+    "name": "this week total query remains summary",
+    "input": "pengeluaran minggu ini berapa?",
+    "expect": {
+      "intent": "query_summary",
+      "metric": "expense_total",
+      "date_preset": "this_week",
+      "needs_clarification": false,
+      "date_start_iso": "2026-04-27",
+      "date_end_iso": "2026-04-27",
+      "gemini_called": false
+    }
+  },
+  {
     "name": "income this month summary",
     "input": "pemasukan bulan ini berapa?",
     "expect": {

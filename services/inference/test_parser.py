@@ -51,6 +51,11 @@ def main() -> int:
         if errors:
             failures.append(format_failure(case, parsed, errors))
 
+    for case in routing_cases(parser):
+        errors = check_case(case, case["parsed"])
+        if errors:
+            failures.append(format_failure(case, case["parsed"], errors))
+
     receipt_test_cases = receipt_cases()
     for case in receipt_test_cases:
         candidates = parser.extract_receipt_candidates(case["ocr"])
@@ -109,6 +114,8 @@ def check_case(case: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
     raw = parsed.get("raw") or {}
     if "gemini_called" in expect:
         assert_equal("raw.gemini_called", raw.get("gemini_called"), expect["gemini_called"])
+    if "raw_provider" in expect:
+        assert_equal("raw.provider", raw.get("provider"), expect["raw_provider"])
     if "normalized_text" in expect:
         assert_equal("raw.normalized_text", raw.get("normalized_text"), expect["normalized_text"])
 
@@ -186,6 +193,68 @@ def check_case(case: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
         assert_equal("query.date_range.end_date", date_range.get("end_date"), expect["date_end_iso"])
 
     return errors
+
+
+def routing_cases(parser: Any) -> list[dict[str, Any]]:
+    previous_key = parser.GEMINI_API_KEY
+    previous_parse_with_gemini = parser.parse_with_gemini
+    cases: list[dict[str, Any]] = []
+    try:
+        parser.GEMINI_API_KEY = "test-key"
+
+        def fake_parse_with_gemini(text: str, conversation: Any = None) -> dict[str, Any]:
+            return parser.normalize_parse(
+                gemini_query_stub(
+                    text,
+                    "2026-04-01",
+                    "2026-06-30",
+                    preset="quarter",
+                    raw_text="Q2",
+                    intent="query_recent_transactions",
+                    metric="transaction_list",
+                )
+            )
+
+        parser.parse_with_gemini = fake_parse_with_gemini
+        cases.append(
+            {
+                "name": "routing uses gemini for natural query when enabled",
+                "input": "list pengeluaran Q2",
+                "parsed": parser.route_parse("list pengeluaran Q2"),
+                "expect": {
+                    "intent": "query_recent_transactions",
+                    "action": "run_query",
+                    "metric": "transaction_list",
+                    "date_preset": "quarter",
+                    "date_start_iso": "2026-04-01",
+                    "date_end_iso": "2026-04-27",
+                    "gemini_called": True,
+                    "raw_provider": "gemini",
+                },
+            }
+        )
+
+        def fail_parse_with_gemini(text: str, conversation: Any = None) -> dict[str, Any]:
+            raise AssertionError("shortcut should not call Gemini")
+
+        parser.parse_with_gemini = fail_parse_with_gemini
+        cases.append(
+            {
+                "name": "routing keeps shortcuts local when gemini enabled",
+                "input": "simpan",
+                "parsed": parser.route_parse("simpan"),
+                "expect": {
+                    "intent": "confirm_draft",
+                    "action": "confirm_draft",
+                    "gemini_called": False,
+                    "raw_provider": "local_shortcut",
+                },
+            }
+        )
+    finally:
+        parser.GEMINI_API_KEY = previous_key
+        parser.parse_with_gemini = previous_parse_with_gemini
+    return cases
 
 
 def validation_cases() -> list[dict[str, Any]]:
@@ -293,6 +362,96 @@ def validation_cases() -> list[dict[str, Any]]:
                 "top_needs_clarification": False,
                 "date_start_iso": "2026-04-20",
                 "date_end_iso": "2026-04-27",
+            },
+        },
+        {
+            "name": "validator accepts gemini detail query as transaction list",
+            "input": "rincian pengeluaran minggu ini",
+            "parsed": gemini_query_stub(
+                "rincian pengeluaran minggu ini",
+                "2026-04-27",
+                "2026-04-27",
+                preset="this_week",
+                raw_text="minggu ini",
+                intent="query_recent_transactions",
+                metric="transaction_list",
+            ),
+            "expect": {
+                "intent": "query_recent_transactions",
+                "action": "run_query",
+                "metric": "transaction_list",
+                "date_preset": "this_week",
+                "top_needs_clarification": False,
+                "date_start_iso": "2026-04-27",
+                "date_end_iso": "2026-04-27",
+            },
+        },
+        {
+            "name": "validator accepts gemini q2 list query",
+            "input": "list pengeluaran Q2",
+            "parsed": gemini_query_stub(
+                "list pengeluaran Q2",
+                "2026-04-01",
+                "2026-06-30",
+                preset="quarter",
+                raw_text="Q2",
+                intent="query_recent_transactions",
+                metric="transaction_list",
+            ),
+            "expect": {
+                "intent": "query_recent_transactions",
+                "action": "run_query",
+                "metric": "transaction_list",
+                "query_type": "expense",
+                "date_preset": "quarter",
+                "top_needs_clarification": False,
+                "date_start_iso": "2026-04-01",
+                "date_end_iso": "2026-04-27",
+            },
+        },
+        {
+            "name": "validator accepts gemini q2 total query",
+            "input": "pengeluaran Q2 berapa",
+            "parsed": gemini_query_stub(
+                "pengeluaran Q2 berapa",
+                "2026-04-01",
+                "2026-06-30",
+                preset="quarter",
+                raw_text="Q2",
+                metric="expense_total",
+            ),
+            "expect": {
+                "intent": "query_summary",
+                "action": "run_query",
+                "metric": "expense_total",
+                "query_type": "expense",
+                "date_preset": "quarter",
+                "top_needs_clarification": False,
+                "date_start_iso": "2026-04-01",
+                "date_end_iso": "2026-04-27",
+            },
+        },
+        {
+            "name": "validator accepts gemini q1 income total query",
+            "input": "total pemasukan Q1",
+            "parsed": gemini_query_stub(
+                "total pemasukan Q1",
+                "2026-01-01",
+                "2026-03-31",
+                preset="quarter",
+                raw_text="Q1",
+                metric="income_total",
+                tx_type="income",
+            ),
+            "expect": {
+                "intent": "query_summary",
+                "action": "run_query",
+                "metric": "income_total",
+                "query_type": "income",
+                "date_preset": "quarter",
+                "top_needs_clarification": False,
+                "date_start_iso": "2026-01-01",
+                "date_end_iso": "2026-03-31",
             },
         },
         {
@@ -587,9 +746,18 @@ def receipt_cases() -> list[dict[str, Any]]:
     ]
 
 
-def gemini_query_stub(source_text: str, start_date: str, end_date: str, preset: str = "gemini_date_range", raw_text: str | None = None) -> dict[str, Any]:
+def gemini_query_stub(
+    source_text: str,
+    start_date: str,
+    end_date: str,
+    preset: str = "gemini_date_range",
+    raw_text: str | None = None,
+    metric: str = "expense_total",
+    intent: str = "query_summary",
+    tx_type: str = "expense",
+) -> dict[str, Any]:
     return {
-        "intent": "query_summary",
+        "intent": intent,
         "action": "run_query",
         "currency": "IDR",
         "description": source_text,
@@ -598,8 +766,8 @@ def gemini_query_stub(source_text: str, start_date: str, end_date: str, preset: 
         "transaction_date": "2026-04-27",
         "transactions": [],
         "query": {
-            "metric": "expense_total",
-            "type": "expense",
+            "metric": metric,
+            "type": tx_type,
             "date_range": {
                 "raw_text": raw_text if raw_text is not None else source_text,
                 "preset": preset,

@@ -55,9 +55,14 @@ Rules:
 - For multiple transactions, transactions must contain one object per transaction.
 - Do not merge separate activities into one transaction unless the user explicitly says it is one total.
 - For query_summary or query_recent_transactions, include query.
-- Query metric is expense_total for "habis brp/pengeluaran berapa" and transaction_list for "beli apa aja/transaksi apa aja".
-- Query type is expense unless the user clearly asks income or all transactions.
+- For query messages, classify the semantic mode, not only keywords:
+  - Use query_recent_transactions and metric transaction_list when the user asks for rows, details, itemization, history, a list, entries, breakdown, or what transactions happened.
+  - Use query_summary and metric expense_total or income_total when the user asks for total, amount, how much, or aggregate spending/income.
+- Query type is expense for spending/outflow, income for income/inflow, and all when the user clearly asks all transactions.
 - Date ranges must be exact YYYY-MM-DD dates based on today {today} and timezone Asia/Jakarta.
+- Interpret general natural periods: today, yesterday, this/last week, this/last month, named months, years, rolling periods, explicit ranges, and quarters (Q1-Q4, quarter 2, kuartal 2).
+- Quarter boundaries: Q1 Jan 1-Mar 31, Q2 Apr 1-Jun 30, Q3 Jul 1-Sep 30, Q4 Oct 1-Dec 31.
+- Never return end_date after today for current/open periods; clamp current periods to today.
 - Interpret dates conversationally, but do not force a date when the message is an edit/correction.
 - "tahun kmrn", "tahun kemarin", and "tahun lalu" refer to the previous calendar year.
 - Month spans and quarter phrases must cover the full requested range.

@@ -17,7 +17,7 @@ from config import (
     PARSER_VERSION,
     PORT,
 )
-from dates import date_range, indonesian_months, normalize_date_range as normalize_date_range_for_today, start_of_week
+from dates import date_range, indonesian_months, last_day_of_month, normalize_date_range as normalize_date_range_for_today, start_of_week
 from gemini import extract_gemini_text, generate_content, strip_json_fence
 from normalize import normalize_category, parse_int_amount, safe_float
 from ocr import OCRError, extract_text_with_doctr
@@ -1060,7 +1060,7 @@ def infer_query(text: str) -> dict[str, Any] | None:
 
 
 def looks_like_query_text(text: str) -> bool:
-    if any(phrase in text for phrase in ["apa aja", "beli apa", "transaksi apa", "jajan apa"]):
+    if any(phrase in text.lower() for phrase in ["apa aja", "beli apa", "transaksi apa", "list", "daftar"]):
         return True
     query_tokens = {
         "brp",
@@ -1075,6 +1075,7 @@ def looks_like_query_text(text: str) -> bool:
         "spending",
         "habis",
         "abis",
+        "transaksi",
     }
     tokens = set(re.findall(r"\b[a-z]+\b", text.lower()))
     return bool(tokens & query_tokens)
@@ -1082,7 +1083,7 @@ def looks_like_query_text(text: str) -> bool:
 
 def query_metric_and_type(text: str) -> tuple[str, str]:
     tx_type = "income" if any(word in text for word in ["income", "pemasukan", "gaji", "masuk"]) else "expense"
-    if any(word in text for word in ["beli apa", "apa aja", "transaksi apa", "jajan apa"]):
+    if any(phrase in text for phrase in ["list", "daftar", "apa aja", "transaksi"]):
         return "transaction_list", tx_type
     if tx_type == "income":
         return "income_total", tx_type
@@ -1104,6 +1105,8 @@ def normalize_parse(parsed: dict[str, Any]) -> dict[str, Any]:
     missing_fields = normalize_missing_fields(missing_fields, parsed)
 
     query = normalize_query(parsed)
+    if query is not None and query.get("metric") == "transaction_list":
+        intent = "query_recent_transactions"
     needs_clarification = bool(parsed.get("needs_clarification"))
     clarification_prompt = str(parsed.get("clarification_prompt") or "")
     if query is not None and query.get("needs_clarification"):
@@ -1341,7 +1344,7 @@ def normalize_query(parsed: dict[str, Any]) -> dict[str, Any] | None:
     if not tx_type:
         tx_type = "income" if any(word in source_text for word in ["income", "pemasukan", "gaji", "masuk"]) else "expense"
 
-    metric = str(query.get("metric") or "")
+    metric = normalize_query_metric(query.get("metric"), intent, tx_type)
     if not metric:
         if intent == "query_recent_transactions":
             metric = "transaction_list"
@@ -1357,6 +1360,18 @@ def normalize_query(parsed: dict[str, Any]) -> dict[str, Any] | None:
         "needs_clarification": needs_clarification,
         "clarification_prompt": query_clarification_prompt(date_range_value) if needs_clarification else "",
     }
+
+
+def normalize_query_metric(value: Any, intent: str, tx_type: str) -> str:
+    metric = str(value or "").strip()
+    allowed = {"expense_total", "income_total", "transaction_list"}
+    if metric in allowed:
+        return metric
+    if intent == "query_recent_transactions":
+        return "transaction_list"
+    if tx_type == "income":
+        return "income_total"
+    return "expense_total"
 
 
 def validate_query_date_against_source(source_text: str, date_range_value: dict[str, Any]) -> dict[str, Any]:
@@ -1399,18 +1414,22 @@ def looks_like_invalid_month_span(source_text: str, date_range_value: dict[str, 
 
 
 def looks_like_invalid_quarter(source_text: str, date_range_value: dict[str, Any]) -> bool:
-    match = re.search(r"\b(?:q|quarter\s*)([1-4])\b", source_text)
+    match = re.search(r"\b(?:q|quarter\s*|kuartal\s*)([1-4])\b", source_text)
     if not match:
         return False
     quarter = int(match.group(1))
     expected_start_month = ((quarter - 1) * 3) + 1
-    expected_end_month = expected_start_month + 2
+    today = datetime.now().date()
+    expected_start = datetime(today.year, expected_start_month, 1).date()
+    expected_end = last_day_of_month(datetime(today.year, expected_start_month + 2, 1).date())
+    if expected_end > today:
+        expected_end = today
     try:
         start = datetime.strptime(str(date_range_value.get("start_date")), "%Y-%m-%d").date()
         end = datetime.strptime(str(date_range_value.get("end_date")), "%Y-%m-%d").date()
     except (TypeError, ValueError):
         return True
-    return start.month != expected_start_month or end.month != expected_end_month
+    return start != expected_start or end != expected_end
 
 
 def default_query_date_range() -> dict[str, Any]:
@@ -1442,6 +1461,13 @@ def normalized_external_date_range(value: Any) -> dict[str, Any] | None:
         return date_range(raw_text, "this_week", start_of_week(today), today, min(confidence, 0.82))
     if preset == "this_month":
         return date_range(raw_text, "this_month", today.replace(day=1), today, min(confidence, 0.82))
+    if preset == "this_year":
+        return date_range(raw_text, "this_year", datetime(today.year, 1, 1).date(), today, min(confidence, 0.82))
+    if preset == "quarter":
+        quarter_range = normalized_quarter_date_range(raw_text, start, today, confidence)
+        if quarter_range is None:
+            return None
+        return quarter_range
 
     if start > end:
         return None
@@ -1460,6 +1486,20 @@ def normalized_external_date_range(value: Any) -> dict[str, Any] | None:
         "end_date": end.isoformat(),
         "confidence": min(confidence, 0.82),
     }
+
+
+def normalized_quarter_date_range(raw_text: str, start: Any, today: Any, confidence: float) -> dict[str, Any] | None:
+    quarter_start_months = {1, 4, 7, 10}
+    if start.month not in quarter_start_months:
+        return None
+    quarter_start = datetime(start.year, start.month, 1).date()
+    if quarter_start > today:
+        return None
+    quarter_end_month = start.month + 2
+    quarter_end = last_day_of_month(datetime(start.year, quarter_end_month, 1).date())
+    if quarter_end > today:
+        quarter_end = today
+    return date_range(raw_text, "quarter", quarter_start, quarter_end, min(confidence, 0.82))
 
 
 def query_clarification_prompt(date_range_value: dict[str, Any]) -> str:
