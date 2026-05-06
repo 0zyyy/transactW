@@ -1,14 +1,12 @@
 import json
 from typing import Any
 
-from config import GEMINI_API_KEY
-from gemini import extract_gemini_text, generate_content, strip_json_fence
+from providers import LLMProvider, ProviderResult
 
 
-def verify_receipt_with_gemini(ocr_result: dict[str, Any], candidates: dict[str, Any]) -> dict[str, Any]:
-    if not GEMINI_API_KEY:
-        raise RuntimeError("Gemini verifier is disabled")
-
+def verify_receipt_with_llm(ocr_result: dict[str, Any], candidates: dict[str, Any], provider: LLMProvider) -> ProviderResult:
+    if not provider.enabled():
+        raise RuntimeError(f"{provider.name} verifier is disabled")
     prompt = f"""
 You verify receipt OCR output for a finance bot. The OCR text was extracted by docTR.
 Return only JSON.
@@ -45,11 +43,4 @@ OCR text:
 Local candidates:
 {json.dumps(candidates, ensure_ascii=False)}
 """.strip()
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.0,
-            "responseMimeType": "application/json",
-        },
-    }
-    return json.loads(strip_json_fence(extract_gemini_text(generate_content(payload))))
+    return provider.generate_json(prompt, temperature=0.0)

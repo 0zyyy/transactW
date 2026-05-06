@@ -20,6 +20,7 @@ load_env_file(".env")
 load_env_file(".env.local")
 
 PORT = int(os.getenv("INFERENCE_PORT", "8090"))
+INFERENCE_PROVIDER = os.getenv("INFERENCE_PROVIDER", "gemini").strip().lower()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 GEMINI_TIMEOUT_SECONDS = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "20"))

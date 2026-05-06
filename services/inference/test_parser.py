@@ -197,27 +197,30 @@ def check_case(case: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
 
 def routing_cases(parser: Any) -> list[dict[str, Any]]:
     previous_key = parser.GEMINI_API_KEY
-    previous_parse_with_gemini = parser.parse_with_gemini
-    previous_parse_receipt_with_gemini = parser.parse_receipt_with_gemini
+    previous_parse_with_llm = parser.parse_with_llm
+    previous_parse_receipt_with_vision_llm = parser.parse_receipt_with_vision_llm
     previous_extract_text_with_doctr = parser.extract_text_with_doctr
     cases: list[dict[str, Any]] = []
     try:
         parser.GEMINI_API_KEY = "test-key"
 
-        def fake_parse_with_gemini(text: str, conversation: Any = None) -> dict[str, Any]:
-            return parser.normalize_parse(
-                gemini_query_stub(
-                    text,
-                    "2026-04-01",
-                    "2026-06-30",
-                    preset="quarter",
-                    raw_text="Q2",
-                    intent="query_recent_transactions",
-                    metric="transaction_list",
-                )
+        def fake_parse_with_llm(text: str, conversation: Any = None) -> tuple[dict[str, Any], Any]:
+            return (
+                parser.normalize_parse(
+                    gemini_query_stub(
+                        text,
+                        "2026-04-01",
+                        "2026-06-30",
+                        preset="quarter",
+                        raw_text="Q2",
+                        intent="query_recent_transactions",
+                        metric="transaction_list",
+                    )
+                ),
+                parser.ProviderResult("gemini", "test-model", {}),
             )
 
-        parser.parse_with_gemini = fake_parse_with_gemini
+        parser.parse_with_llm = fake_parse_with_llm
         cases.append(
             {
                 "name": "routing uses gemini for natural query when enabled",
@@ -236,10 +239,10 @@ def routing_cases(parser: Any) -> list[dict[str, Any]]:
             }
         )
 
-        def fail_parse_with_gemini(text: str, conversation: Any = None) -> dict[str, Any]:
-            raise AssertionError("shortcut should not call Gemini")
+        def fail_parse_with_llm(text: str, conversation: Any = None) -> tuple[dict[str, Any], Any]:
+            raise AssertionError("shortcut should not call LLM")
 
-        parser.parse_with_gemini = fail_parse_with_gemini
+        parser.parse_with_llm = fail_parse_with_llm
         cases.append(
             {
                 "name": "routing keeps shortcuts local when gemini enabled",
@@ -254,23 +257,27 @@ def routing_cases(parser: Any) -> list[dict[str, Any]]:
             }
         )
 
-        def fake_parse_receipt_with_gemini(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> dict[str, Any]:
-            return {
-                "is_receipt": True,
-                "receipt_confidence": 0.95,
-                "merchant": "Vision Store",
-                "date": "2026-04-27",
-                "currency": "IDR",
-                "totals": [{"label": "grand total", "amount": 46200, "confidence": 0.95}],
-                "line_items": [],
-                "payment_method": "QRIS",
-                "notes": "",
-            }
+        def fake_parse_receipt_with_vision_llm(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> Any:
+            return parser.ProviderResult(
+                "gemini",
+                "test-model",
+                {
+                    "is_receipt": True,
+                    "receipt_confidence": 0.95,
+                    "merchant": "Vision Store",
+                    "date": "2026-04-27",
+                    "currency": "IDR",
+                    "totals": [{"label": "grand total", "amount": 46200, "confidence": 0.95}],
+                    "line_items": [],
+                    "payment_method": "QRIS",
+                    "notes": "",
+                },
+            )
 
         def fail_extract_text_with_doctr(image_base64: str) -> dict[str, Any]:
             raise AssertionError("Gemini-enabled receipt routing should not call docTR first")
 
-        parser.parse_receipt_with_gemini = fake_parse_receipt_with_gemini
+        parser.parse_receipt_with_vision_llm = fake_parse_receipt_with_vision_llm
         parser.extract_text_with_doctr = fail_extract_text_with_doctr
         cases.append(
             {
@@ -287,7 +294,7 @@ def routing_cases(parser: Any) -> list[dict[str, Any]]:
             }
         )
 
-        def fail_parse_receipt_with_gemini(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> dict[str, Any]:
+        def fail_parse_receipt_with_vision_llm(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> Any:
             raise RuntimeError("vision unavailable")
 
         def fake_extract_text_with_doctr(image_base64: str) -> dict[str, Any]:
@@ -301,7 +308,7 @@ def routing_cases(parser: Any) -> list[dict[str, Any]]:
                 ],
             }
 
-        parser.parse_receipt_with_gemini = fail_parse_receipt_with_gemini
+        parser.parse_receipt_with_vision_llm = fail_parse_receipt_with_vision_llm
         parser.extract_text_with_doctr = fake_extract_text_with_doctr
         cases.append(
             {
@@ -318,8 +325,8 @@ def routing_cases(parser: Any) -> list[dict[str, Any]]:
         )
     finally:
         parser.GEMINI_API_KEY = previous_key
-        parser.parse_with_gemini = previous_parse_with_gemini
-        parser.parse_receipt_with_gemini = previous_parse_receipt_with_gemini
+        parser.parse_with_llm = previous_parse_with_llm
+        parser.parse_receipt_with_vision_llm = previous_parse_receipt_with_vision_llm
         parser.extract_text_with_doctr = previous_extract_text_with_doctr
     return cases
 

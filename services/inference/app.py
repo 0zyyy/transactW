@@ -9,6 +9,7 @@ from config import (
     GEMINI_API_KEY,
     GEMINI_MODEL,
     GEMINI_TIMEOUT_SECONDS,
+    INFERENCE_PROVIDER,
     LOCAL_CONFIDENCE_THRESHOLD,
     OCR_ALLOW_GEMINI_VISION_FALLBACK,
     OCR_ENGINE,
@@ -18,13 +19,13 @@ from config import (
     PORT,
 )
 from dates import date_range, indonesian_months, last_day_of_month, normalize_date_range as normalize_date_range_for_today, start_of_week
-from gemini import extract_gemini_text, generate_content, strip_json_fence
 from normalize import normalize_category, parse_int_amount, safe_float
 from ocr import OCRError, extract_text_with_doctr
 from offline import cleanup_description, infer_account, infer_category, infer_intent_candidates
 from prompts import build_prompt, build_receipt_ocr_prompt
+from providers import LLMProvider, ProviderResult, create_provider
 from receipt import best_receipt_total, extract_receipt_candidates, infer_receipt_category, normalize_receipt_date, ocr_candidates_to_receipt_ocr, receipt_description
-from receipt_verify import verify_receipt_with_gemini
+from receipt_verify import verify_receipt_with_llm
 
 
 def normalize_date_range(text: str) -> dict[str, Any]:
@@ -93,7 +94,15 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
-def parse_with_gemini(text: str, conversation: Any = None) -> dict[str, Any]:
+def primary_provider() -> LLMProvider:
+    return create_provider(INFERENCE_PROVIDER, GEMINI_API_KEY, GEMINI_MODEL, GEMINI_TIMEOUT_SECONDS)
+
+
+def llm_enabled() -> bool:
+    return primary_provider().enabled()
+
+
+def parse_with_llm(text: str, conversation: Any = None) -> tuple[dict[str, Any], ProviderResult]:
     prompt = build_prompt(text, conversation)
     schema = {
         "type": "object",
@@ -205,39 +214,26 @@ def parse_with_gemini(text: str, conversation: Any = None) -> dict[str, Any]:
             "missing_fields",
         ],
     }
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.1,
-            "responseMimeType": "application/json",
-            "responseSchema": schema,
-        },
-    }
-    data = generate_content(payload)
-    text_response = extract_gemini_text(data)
-    parsed = json.loads(strip_json_fence(text_response))
+    provider = primary_provider()
+    result = provider.generate_json(prompt, schema=schema, temperature=0.1)
+    parsed = result.data
     parsed["_source_text"] = text
-    return normalize_parse(parsed)
+    return normalize_parse(parsed), result
+
+
+def parse_with_gemini(text: str, conversation: Any = None) -> dict[str, Any]:
+    parsed, _ = parse_with_llm(text, conversation)
+    return parsed
+
+
+def parse_receipt_with_vision_llm(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> ProviderResult:
+    prompt = build_receipt_ocr_prompt(caption)
+    provider = primary_provider()
+    return provider.generate_vision_json(prompt, image_base64, mime_type, temperature=0.1)
 
 
 def parse_receipt_with_gemini(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> dict[str, Any]:
-    prompt = build_receipt_ocr_prompt(caption)
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt},
-                    {"inline_data": {"mime_type": mime_type or "image/jpeg", "data": image_base64}},
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.1,
-            "responseMimeType": "application/json",
-        },
-    }
-    data = generate_content(payload)
-    return json.loads(strip_json_fence(extract_gemini_text(data)))
+    return parse_receipt_with_vision_llm(image_base64, mime_type, caption, conversation).data
 
 
 def route_parse(text: str, conversation: Any = None) -> dict[str, Any]:
@@ -254,26 +250,28 @@ def route_parse(text: str, conversation: Any = None) -> dict[str, Any]:
         }
         return shortcut
 
-    if GEMINI_API_KEY:
+    if llm_enabled():
         try:
-            gemini = parse_with_gemini(normalized_text, conversation)
-            gemini["raw"] = {
-                "provider": "gemini",
-                "model": GEMINI_MODEL,
-                "gemini_called": True,
+            parsed, result = parse_with_llm(normalized_text, conversation)
+            parsed["raw"] = {
+                "provider": result.provider,
+                "model": result.model,
+                "llm_called": True,
+                "gemini_called": result.provider == "gemini",
                 "fallback_reason": "natural_language_default",
                 "original_text": text,
                 "normalized_text": normalized_text,
                 "parser_version": PARSER_VERSION,
             }
-            return gemini
+            return parsed
         except Exception as exc:
             local = parse_with_offline_fallback(normalized_text)
             local["raw"] = {
-                "provider": "offline_fallback_after_gemini_error",
+                "provider": "offline_fallback_after_llm_error",
+                "llm_called": True,
                 "gemini_called": True,
-                "fallback_reason": "gemini_error",
-                "gemini_error": str(exc),
+                "fallback_reason": "llm_error",
+                "llm_error": str(exc),
                 "local_confidence": local.get("confidence", 0),
                 "original_text": text,
                 "normalized_text": normalized_text,
@@ -296,7 +294,7 @@ def route_parse(text: str, conversation: Any = None) -> dict[str, Any]:
         }
         return clarified
     decision = local_route_decision(text, local)
-    if not decision["use_local"] and not GEMINI_API_KEY and looks_like_messy_query(normalized_text):
+    if not decision["use_local"] and not llm_enabled() and looks_like_messy_query(normalized_text):
         local = messy_query_clarification(normalized_text)
         local["raw"] = {
             "provider": "offline_fallback_clarification",
@@ -307,7 +305,7 @@ def route_parse(text: str, conversation: Any = None) -> dict[str, Any]:
             "parser_version": PARSER_VERSION,
         }
         return local
-    if decision["use_local"] or not GEMINI_API_KEY:
+    if decision["use_local"] or not llm_enabled():
         local["raw"] = {
             "provider": "offline_fallback_rules",
             "gemini_called": False,
@@ -321,7 +319,7 @@ def route_parse(text: str, conversation: Any = None) -> dict[str, Any]:
 
 
 def route_parse_receipt(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> dict[str, Any]:
-    if GEMINI_API_KEY:
+    if llm_enabled():
         try:
             return route_parse_receipt_with_gemini_vision(image_base64, mime_type, caption, "gemini_vision_primary")
         except Exception as exc:
@@ -353,9 +351,10 @@ def route_parse_receipt_with_doctr(image_base64: str, caption: str, reason: str,
         return parsed
 
     verifier = None
-    if OCR_GEMINI_VERIFY and GEMINI_API_KEY:
+    if OCR_GEMINI_VERIFY and llm_enabled():
         try:
-            verifier = verify_receipt_with_gemini(ocr_result, candidates)
+            verifier_result = verify_receipt_with_llm(ocr_result, candidates, primary_provider())
+            verifier = verifier_result.data
         except Exception as exc:
             verifier = {"error": str(exc)}
 
@@ -367,14 +366,16 @@ def route_parse_receipt_with_doctr(image_base64: str, caption: str, reason: str,
 
 
 def route_parse_receipt_with_gemini_vision(image_base64: str, mime_type: str, caption: str, reason: str) -> dict[str, Any]:
-    if not GEMINI_API_KEY:
+    if not llm_enabled():
         return receipt_ocr_clarification(caption, reason)
-    ocr = parse_receipt_with_gemini(image_base64, mime_type, caption)
+    result = parse_receipt_with_vision_llm(image_base64, mime_type, caption)
+    ocr = result.data
     parsed = normalize_receipt_ocr(ocr, caption)
     parsed["raw"] = {
-        "provider": "gemini_vision",
-        "model": GEMINI_MODEL,
-        "gemini_called": True,
+        "provider": result.provider + "_vision",
+        "model": result.model,
+        "llm_called": True,
+        "gemini_called": result.provider == "gemini",
         "fallback_reason": reason,
         "original_text": caption,
         "normalized_text": caption,
