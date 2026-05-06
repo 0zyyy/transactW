@@ -112,12 +112,12 @@ func applyEditDraft(current inference.ParseTextResponse, editParsed inference.Pa
 		} else if !applyEditToItem(&updated.Transactions[index], editParsed, field) {
 			return current, false
 		}
+		if len(updated.Transactions) == 0 {
+			return current, false
+		}
 		recalculateTotal(&updated)
 		if len(updated.Transactions) == 1 {
-			updated.Intent = "create_expense"
-			if updated.Transactions[0].Type == "income" {
-				updated.Intent = "create_income"
-			}
+			promoteSingleTransaction(&updated)
 		}
 		return updated, true
 	}
@@ -225,6 +225,25 @@ func recalculateTotal(parsed *inference.ParseTextResponse) {
 		total += item.Amount
 	}
 	parsed.Amount = &total
+}
+
+func promoteSingleTransaction(parsed *inference.ParseTextResponse) {
+	if len(parsed.Transactions) != 1 {
+		return
+	}
+	item := parsed.Transactions[0]
+	parsed.Intent = "create_expense"
+	if item.Type == "income" {
+		parsed.Intent = "create_income"
+	}
+	parsed.Amount = &item.Amount
+	parsed.Currency = item.Currency
+	parsed.MerchantName = item.MerchantName
+	parsed.Description = item.Description
+	parsed.CategoryHint = item.CategoryHint
+	parsed.AccountHint = item.AccountHint
+	parsed.TransactionDate = item.TransactionDate
+	parsed.Transactions = nil
 }
 
 func formatEditDraft(parsed inference.ParseTextResponse, debug bool) string {

@@ -6,6 +6,7 @@
 .gomodcache/
 docs/
 .codex
+.gitnexus/
 tst_img/
 __pycache__/
 *.py[cod]
