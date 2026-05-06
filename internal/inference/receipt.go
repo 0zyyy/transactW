@@ -10,7 +10,10 @@ type ReceiptItem struct {
 func ReceiptItems(parsed ParseTextResponse) []ReceiptItem {
 	receiptOCR, ok := parsed.Raw["receipt_ocr"].(map[string]any)
 	if !ok {
-		return nil
+		receiptOCR, ok = parsed.Raw["receipt_candidates"].(map[string]any)
+		if !ok {
+			return nil
+		}
 	}
 	lineItems, ok := receiptOCR["line_items"].([]any)
 	if !ok {

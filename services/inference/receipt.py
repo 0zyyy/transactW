@@ -72,17 +72,20 @@ def extract_receipt_candidates(ocr_result: dict[str, Any]) -> dict[str, Any]:
 def ocr_candidates_to_receipt_ocr(candidates: dict[str, Any], verifier: dict[str, Any] | None = None) -> dict[str, Any]:
     verifier = verifier or {}
     total = parse_int_amount(verifier.get("selected_total"))
+    total_confidence = safe_float(verifier.get("confidence"), 0.0)
     totals = candidates.get("total_candidates") or []
     if total is None:
         best = best_receipt_total(totals)
-        total = best[0] if best else None
+        if best:
+            total = best[0]
+            total_confidence = best[1]
     selected_totals = []
     if total is not None:
         selected_totals.append(
             {
                 "label": str(verifier.get("selected_total_label") or "total"),
                 "amount": total,
-                "confidence": safe_float(verifier.get("confidence"), safe_float(candidates.get("receipt_confidence"), 0.6)),
+                "confidence": total_confidence or safe_float(candidates.get("receipt_confidence"), 0.6),
             }
         )
     merchant = str(verifier.get("merchant") or first_or_empty(candidates.get("merchant_candidates")))

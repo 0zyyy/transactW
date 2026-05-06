@@ -28,6 +28,7 @@ LOCAL_CONFIDENCE_THRESHOLD = float(os.getenv("LOCAL_CONFIDENCE_THRESHOLD", "0.90
 OCR_ENGINE = os.getenv("OCR_ENGINE", "doctr")
 OCR_GEMINI_VERIFY = os.getenv("OCR_GEMINI_VERIFY", "true").lower() == "true"
 OCR_ALLOW_GEMINI_VISION_FALLBACK = os.getenv("OCR_ALLOW_GEMINI_VISION_FALLBACK", "false").lower() == "true"
+OCR_TOTAL_DRAFT_CONFIDENCE_THRESHOLD = float(os.getenv("OCR_TOTAL_DRAFT_CONFIDENCE_THRESHOLD", "0.45"))
 DOCTR_DET_ARCH = os.getenv("DOCTR_DET_ARCH", "fast_base")
 DOCTR_RECO_ARCH = os.getenv("DOCTR_RECO_ARCH", "crnn_vgg16_bn")
 

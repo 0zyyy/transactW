@@ -72,6 +72,11 @@ def check_case(case: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
     expect = case["expect"]
     errors: list[str] = []
 
+    if str(parsed.get("intent") or "").strip() == "":
+        errors.append("intent invariant: must not be blank")
+    if str(parsed.get("action") or "").strip() == "":
+        errors.append("action invariant: must not be blank")
+
     def assert_equal(label: str, actual: Any, expected: Any) -> None:
         if actual != expected:
             errors.append(f"{label}: expected {expected!r}, got {actual!r}")
@@ -377,6 +382,72 @@ def validation_cases() -> list[dict[str, Any]]:
                 "amount": 2000000,
             },
         },
+        {
+            "name": "validator repairs blank intent without draft action",
+            "input": "malformed parser output",
+            "parsed": {
+                "intent": "",
+                "action": "",
+                "currency": "IDR",
+                "description": "",
+                "category_hint": "",
+                "account_hint": "",
+                "transaction_date": "2026-04-27",
+                "transactions": [],
+                "confidence": 0,
+                "missing_fields": [],
+            },
+            "expect": {
+                "intent": "unknown",
+                "action": "none",
+                "top_needs_clarification": False,
+            },
+        },
+        {
+            "name": "validator recovers blank create draft intent with amount",
+            "input": "malformed receipt parser output with amount",
+            "parsed": {
+                "intent": " ",
+                "action": "create_draft",
+                "needs_confirmation": True,
+                "amount": 28200,
+                "currency": "IDR",
+                "description": "struk",
+                "category_hint": "Belanja Harian",
+                "account_hint": "",
+                "transaction_date": "2026-04-27",
+                "transactions": [],
+                "confidence": 0.8,
+                "missing_fields": [],
+            },
+            "expect": {
+                "intent": "create_expense",
+                "action": "create_draft",
+                "needs_confirmation": True,
+                "amount": 28200,
+                "category_hint": "Belanja Harian",
+            },
+        },
+        {
+            "name": "validator downgrades invalid intent",
+            "input": "bad intent parser output",
+            "parsed": {
+                "intent": "receipt_expense",
+                "action": "none",
+                "currency": "IDR",
+                "description": "bad intent",
+                "category_hint": "",
+                "account_hint": "",
+                "transaction_date": "2026-04-27",
+                "transactions": [],
+                "confidence": 0,
+                "missing_fields": [],
+            },
+            "expect": {
+                "intent": "unknown",
+                "action": "none",
+            },
+        },
     ]
 
 
@@ -415,6 +486,43 @@ def receipt_cases() -> list[dict[str, Any]]:
                 ]
             },
             "expect": {"action": "none", "needs_confirmation": False},
+        },
+        {
+            "name": "low confidence receipt total asks clarification",
+            "input": "low confidence receipt image",
+            "ocr": {
+                "lines": [
+                    {"text": "TOKO BURAM", "confidence": 0.55},
+                    {"text": "TOTAL BELANJA", "confidence": 0.40},
+                    {"text": "28.200", "confidence": 0.40},
+                    {"text": "TUNAI", "confidence": 0.40},
+                    {"text": "50.000", "confidence": 0.40},
+                ]
+            },
+            "expect": {
+                "intent": "unknown",
+                "action": "ask_clarification",
+                "amount": 28200,
+                "needs_confirmation": False,
+                "top_needs_clarification": True,
+            },
+        },
+        {
+            "name": "clear total creates draft even with moderate receipt confidence",
+            "input": "moderate confidence receipt image",
+            "ocr": {
+                "lines": [
+                    {"text": "TOTAL BELANJA", "confidence": 0.90},
+                    {"text": "42.000", "confidence": 0.90},
+                ]
+            },
+            "expect": {
+                "intent": "create_expense",
+                "action": "create_draft",
+                "amount": 42000,
+                "needs_confirmation": True,
+                "top_needs_clarification": False,
+            },
         },
     ]
 

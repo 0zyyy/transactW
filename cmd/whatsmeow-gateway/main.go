@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
@@ -19,6 +18,7 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
+	_ "modernc.org/sqlite"
 
 	"transactw/internal/config"
 	"transactw/internal/conversation"
@@ -48,9 +48,9 @@ func main() {
 	}
 	defer db.Close()
 
-	storePath := getenv("WHATSMEOW_STORE_PATH", "file:whatsmeow-session.db?_foreign_keys=on")
+	storePath := getenv("WHATSMEOW_STORE_PATH", "file:whatsmeow-session.db?_pragma=foreign_keys(1)")
 	dbLog := waLog.Stdout("WhatsmeowDB", getenv("WHATSMEOW_LOG_LEVEL", "INFO"), true)
-	container, err := sqlstore.New(ctx, "sqlite3", storePath, dbLog)
+	container, err := sqlstore.New(ctx, "sqlite", storePath, dbLog)
 	if err != nil {
 		logger.Error("failed to open whatsmeow store", "error", err)
 		os.Exit(1)

@@ -13,6 +13,7 @@ from config import (
     OCR_ALLOW_GEMINI_VISION_FALLBACK,
     OCR_ENGINE,
     OCR_GEMINI_VERIFY,
+    OCR_TOTAL_DRAFT_CONFIDENCE_THRESHOLD,
     PARSER_VERSION,
     PORT,
 )
@@ -332,8 +333,9 @@ def route_parse_receipt(image_base64: str, mime_type: str, caption: str, convers
 
     candidates = extract_receipt_candidates(ocr_result)
     if not candidates.get("is_receipt_candidate"):
-        parsed = normalize_receipt_ocr(ocr_candidates_to_receipt_ocr(candidates), caption)
-        parsed["raw"] = receipt_raw("doctr", caption, ocr_result, candidates, None, "not_receipt_candidate")
+        ocr = ocr_candidates_to_receipt_ocr(candidates)
+        parsed = normalize_receipt_ocr(ocr, caption)
+        parsed["raw"] = receipt_raw("doctr", caption, ocr_result, candidates, None, ocr, "not_receipt_candidate")
         return parsed
 
     verifier = None
@@ -346,7 +348,7 @@ def route_parse_receipt(image_base64: str, mime_type: str, caption: str, convers
     ocr = ocr_candidates_to_receipt_ocr(candidates, verifier if verifier and "error" not in verifier else None)
     parsed = normalize_receipt_ocr(ocr, caption)
     provider = "doctr_gemini_verifier" if verifier else "doctr"
-    parsed["raw"] = receipt_raw(provider, caption, ocr_result, candidates, verifier, "receipt_ocr")
+    parsed["raw"] = receipt_raw(provider, caption, ocr_result, candidates, verifier, ocr, "receipt_ocr")
     return parsed
 
 
@@ -407,7 +409,15 @@ def receipt_ocr_clarification(caption: str, reason: str) -> dict[str, Any]:
     return parsed
 
 
-def receipt_raw(provider: str, caption: str, ocr_result: dict[str, Any], candidates: dict[str, Any], verifier: dict[str, Any] | None, reason: str) -> dict[str, Any]:
+def receipt_raw(
+    provider: str,
+    caption: str,
+    ocr_result: dict[str, Any],
+    candidates: dict[str, Any],
+    verifier: dict[str, Any] | None,
+    normalized_ocr: dict[str, Any],
+    reason: str,
+) -> dict[str, Any]:
     return {
         "provider": provider,
         "model": GEMINI_MODEL if verifier else "",
@@ -415,7 +425,8 @@ def receipt_raw(provider: str, caption: str, ocr_result: dict[str, Any], candida
         "fallback_reason": reason,
         "original_text": caption,
         "normalized_text": caption,
-        "receipt_ocr": ocr_result,
+        "receipt_ocr": normalized_ocr,
+        "receipt_doctr": ocr_result,
         "receipt_candidates": candidates,
         "gemini_verifier": verifier or {},
         "parser_version": PARSER_VERSION,
@@ -477,6 +488,37 @@ def normalize_receipt_ocr(ocr: dict[str, Any], caption: str) -> dict[str, Any]:
         )
 
     amount, total_confidence = total
+    receipt_confidence = safe_float(ocr.get("receipt_confidence"), 0.7)
+    confidence = min(max((receipt_confidence + total_confidence) / 2, total_confidence), 0.95)
+    if total_confidence < OCR_TOTAL_DRAFT_CONFIDENCE_THRESHOLD:
+        return normalize_parse(
+            {
+                "intent": "unknown",
+                "action": "ask_clarification",
+                "reply_draft": "Struk kebaca, tapi totalnya belum cukup yakin.",
+                "needs_confirmation": False,
+                "needs_clarification": True,
+                "clarification_prompt": "Struknya kebaca, tapi totalnya belum cukup yakin. Tolong balas total yang benar ya.",
+                "intent_candidates": [
+                    {
+                        "intent": "create_expense",
+                        "score": total_confidence,
+                        "reason": "receipt total detected with low confidence",
+                        "needs_reply": True,
+                    }
+                ],
+                "amount": amount,
+                "currency": str(ocr.get("currency") or "IDR"),
+                "merchant_name": str(ocr.get("merchant") or ""),
+                "description": receipt_description(ocr, caption),
+                "category_hint": infer_receipt_category(ocr),
+                "account_hint": "",
+                "transaction_date": normalize_receipt_date(ocr.get("date"), today),
+                "transactions": [],
+                "confidence": confidence,
+                "missing_fields": [],
+            }
+        )
     return normalize_parse(
         {
             "intent": "create_expense",
@@ -501,7 +543,7 @@ def normalize_receipt_ocr(ocr: dict[str, Any], caption: str) -> dict[str, Any]:
             "account_hint": "",
             "transaction_date": normalize_receipt_date(ocr.get("date"), today),
             "transactions": [],
-            "confidence": min(max(safe_float(ocr.get("receipt_confidence"), 0.7), total_confidence), 0.95),
+            "confidence": confidence,
             "missing_fields": [],
         }
     )
@@ -1049,11 +1091,12 @@ def query_metric_and_type(text: str) -> tuple[str, str]:
 
 def normalize_parse(parsed: dict[str, Any]) -> dict[str, Any]:
     source_text = str(parsed.get("_source_text") or parsed.get("description") or "")
-    intent = normalize_intent_from_source(str(parsed.get("intent") or "unknown"), source_text)
     amount = parse_int_amount(parsed.get("amount"))
     transactions = normalize_transactions(parsed)
     if amount is None and transactions:
         amount = sum(int(transaction["amount"]) for transaction in transactions)
+
+    intent = normalize_intent_from_source(str(parsed.get("intent") or "unknown"), source_text, parsed.get("action"), amount)
 
     missing_fields = parsed.get("missing_fields")
     if not isinstance(missing_fields, list):
@@ -1099,10 +1142,27 @@ def normalize_parse(parsed: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def normalize_intent_from_source(intent: str, source_text: str) -> str:
+def normalize_intent_from_source(intent: str, source_text: str, action: Any = None, amount: int | None = None) -> str:
+    allowed = {
+        "create_expense",
+        "create_income",
+        "create_multiple_transactions",
+        "query_summary",
+        "query_recent_transactions",
+        "edit_draft",
+        "confirm_draft",
+        "cancel_flow",
+        "help",
+        "unknown",
+    }
+    intent = intent.strip()
+    if intent not in allowed:
+        intent = "unknown"
     lowered = source_text.lower()
     if intent == "unknown" and re.search(r"\b(?:hapus|delete|remove)\b", lowered):
         return "edit_draft"
+    if intent == "unknown" and str(action or "").strip() == "create_draft" and amount is not None and amount > 0:
+        return "create_expense"
     return intent
 
 
@@ -1117,7 +1177,7 @@ def normalize_missing_fields(missing_fields: list[Any], parsed: dict[str, Any]) 
 
 def normalize_action(value: Any, intent: str, needs_clarification: bool) -> str:
     allowed = {"create_draft", "run_query", "edit_draft", "confirm_draft", "cancel_flow", "show_help", "ask_clarification", "none"}
-    action = str(value or "")
+    action = str(value or "").strip()
     if action == "none" and intent == "edit_draft":
         return "edit_draft"
     if action in allowed:
