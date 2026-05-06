@@ -255,6 +255,44 @@ def validation_cases() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "validator forces gemini this week preset to local range",
+            "input": "pengeluaran minngu ini",
+            "parsed": gemini_query_stub("pengeluaran minngu ini", "2026-04-28", "2026-05-11", preset="this_week", raw_text="minggu ini"),
+            "expect": {
+                "intent": "query_summary",
+                "action": "run_query",
+                "top_needs_clarification": False,
+                "date_preset": "this_week",
+                "date_start_iso": "2026-04-27",
+                "date_end_iso": "2026-04-27",
+            },
+        },
+        {
+            "name": "validator forces gemini this month preset to local range",
+            "input": "pengeluaran buln ini",
+            "parsed": gemini_query_stub("pengeluaran buln ini", "2026-04-01", "2026-04-30", preset="this_month", raw_text="bulan ini"),
+            "expect": {
+                "intent": "query_summary",
+                "action": "run_query",
+                "top_needs_clarification": False,
+                "date_preset": "this_month",
+                "date_start_iso": "2026-04-01",
+                "date_end_iso": "2026-04-27",
+            },
+        },
+        {
+            "name": "validator clamps future gemini end date",
+            "input": "pengeluaran periode ini",
+            "parsed": gemini_query_stub("pengeluaran periode ini", "2026-04-20", "2026-04-30"),
+            "expect": {
+                "intent": "query_summary",
+                "action": "run_query",
+                "top_needs_clarification": False,
+                "date_start_iso": "2026-04-20",
+                "date_end_iso": "2026-04-27",
+            },
+        },
+        {
             "name": "validator upgrades delete wording to edit draft",
             "input": "hapus yang pertama",
             "parsed": {
@@ -527,7 +565,7 @@ def receipt_cases() -> list[dict[str, Any]]:
     ]
 
 
-def gemini_query_stub(source_text: str, start_date: str, end_date: str) -> dict[str, Any]:
+def gemini_query_stub(source_text: str, start_date: str, end_date: str, preset: str = "gemini_date_range", raw_text: str | None = None) -> dict[str, Any]:
     return {
         "intent": "query_summary",
         "action": "run_query",
@@ -541,8 +579,8 @@ def gemini_query_stub(source_text: str, start_date: str, end_date: str) -> dict[
             "metric": "expense_total",
             "type": "expense",
             "date_range": {
-                "raw_text": source_text,
-                "preset": "gemini_date_range",
+                "raw_text": raw_text if raw_text is not None else source_text,
+                "preset": preset,
                 "start_date": start_date,
                 "end_date": end_date,
                 "confidence": 0.9,

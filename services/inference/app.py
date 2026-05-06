@@ -17,7 +17,7 @@ from config import (
     PARSER_VERSION,
     PORT,
 )
-from dates import date_range, indonesian_months, normalize_date_range as normalize_date_range_for_today
+from dates import date_range, indonesian_months, normalize_date_range as normalize_date_range_for_today, start_of_week
 from gemini import extract_gemini_text, generate_content, strip_json_fence
 from normalize import normalize_category, parse_int_amount, safe_float
 from ocr import OCRError, extract_text_with_doctr
@@ -1431,18 +1431,31 @@ def normalized_external_date_range(value: Any) -> dict[str, Any] | None:
     except ValueError:
         return None
     today = datetime.now().date()
+
+    confidence = float(value.get("confidence") or 0.65)
+    if confidence < 0.60:
+        return None
+    raw_text = str(value.get("raw_text") or "")
+    preset = str(value.get("preset") or "gemini_date_range")
+
+    if preset == "this_week":
+        return date_range(raw_text, "this_week", start_of_week(today), today, min(confidence, 0.82))
+    if preset == "this_month":
+        return date_range(raw_text, "this_month", today.replace(day=1), today, min(confidence, 0.82))
+
     if start > end:
         return None
     if start > today:
         return None
+    if end > today:
+        end = today
+        if start > end:
+            return None
     if (today - start).days > 3650:
         return None
-    confidence = float(value.get("confidence") or 0.65)
-    if confidence < 0.60:
-        return None
     return {
-        "raw_text": str(value.get("raw_text") or ""),
-        "preset": str(value.get("preset") or "gemini_date_range"),
+        "raw_text": raw_text,
+        "preset": preset,
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
         "confidence": min(confidence, 0.82),
