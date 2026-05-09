@@ -20,9 +20,7 @@ type Config struct {
 	MediaQueueMaxPending   int
 	MediaJobMaxAttempts    int
 	VoiceNoteEnabled       bool
-	VoiceNoteMaxBytes      int64
 	VoiceWorkerConcurrency int
-	VoiceJobTimeout        time.Duration
 }
 
 func Load() Config {
@@ -40,9 +38,7 @@ func Load() Config {
 		MediaQueueMaxPending:   getenvInt("MEDIA_QUEUE_MAX_PENDING", 100),
 		MediaJobMaxAttempts:    getenvInt("MEDIA_JOB_MAX_ATTEMPTS", 3),
 		VoiceNoteEnabled:       getenvBool("VOICE_NOTE_ENABLED", true),
-		VoiceNoteMaxBytes:      int64(getenvInt("VOICE_NOTE_MAX_BYTES", 5000000)),
 		VoiceWorkerConcurrency: getenvInt("VOICE_WORKER_CONCURRENCY", 2),
-		VoiceJobTimeout:        time.Duration(getenvInt("VOICE_JOB_TIMEOUT_SECONDS", 45)) * time.Second,
 	}
 }
 

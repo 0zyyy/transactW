@@ -17,7 +17,6 @@ from config import (
     OCR_TOTAL_DRAFT_CONFIDENCE_THRESHOLD,
     PARSER_VERSION,
     PORT,
-    VOICE_TRANSCRIBE_MODEL,
 )
 from dates import date_range, indonesian_months, last_day_of_month, normalize_date_range as normalize_date_range_for_today, start_of_week
 from normalize import normalize_category, parse_int_amount, safe_float
@@ -114,7 +113,7 @@ def llm_enabled() -> bool:
 
 
 def transcribe_audio(audio_base64: str, mime_type: str) -> dict[str, Any]:
-    provider = create_provider(INFERENCE_PROVIDER, GEMINI_API_KEY, VOICE_TRANSCRIBE_MODEL, GEMINI_TIMEOUT_SECONDS)
+    provider = primary_provider()
     if not provider.enabled() or not getattr(provider, "supports_audio", False):
         raise RuntimeError("audio transcription provider is disabled")
     schema = {

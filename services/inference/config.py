@@ -24,7 +24,6 @@ INFERENCE_PROVIDER = os.getenv("INFERENCE_PROVIDER", "gemini").strip().lower()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 GEMINI_TIMEOUT_SECONDS = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "20"))
-VOICE_TRANSCRIBE_MODEL = os.getenv("VOICE_TRANSCRIBE_MODEL", GEMINI_MODEL)
 PARSER_VERSION = "2026-04-27.multi-transaction-v1"
 LOCAL_CONFIDENCE_THRESHOLD = float(os.getenv("LOCAL_CONFIDENCE_THRESHOLD", "0.90"))
 OCR_ENGINE = os.getenv("OCR_ENGINE", "doctr")

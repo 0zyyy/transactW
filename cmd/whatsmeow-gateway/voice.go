@@ -20,7 +20,11 @@ import (
 	"transactw/internal/persistence"
 )
 
-const voiceNoteMediaType = "voice_note"
+const (
+	voiceNoteMediaType = "voice_note"
+	voiceNoteMaxBytes  = 5_000_000
+	voiceJobTimeout    = 45 * time.Second
+)
 
 func (g gateway) enqueueVoiceNote(ctx context.Context, evt *events.Message, audio *waProto.AudioMessage, conversationKey, senderID string) bool {
 	if !g.cfg.VoiceNoteEnabled {
@@ -40,7 +44,7 @@ func (g gateway) enqueueVoiceNote(ctx context.Context, evt *events.Message, audi
 		g.logger.Error("failed to download voice note", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
 		return g.sendAndRecordReply(ctx, evt, conversationKey, "Voice note belum bisa diproses. Coba kirim ulang atau ketik transaksinya.", "voice download failure reply")
 	}
-	if g.cfg.VoiceNoteMaxBytes > 0 && int64(len(audioData)) > g.cfg.VoiceNoteMaxBytes {
+	if len(audioData) > voiceNoteMaxBytes {
 		return g.sendAndRecordReply(ctx, evt, conversationKey, "Voice note terlalu panjang. Coba kirim yang lebih pendek atau ketik transaksinya.", "voice too large reply")
 	}
 	storagePath, mediaHash, err := writeTempMedia(g.cfg.MediaTempDir, voiceNoteMediaType, evt.Info.ID, audioData)
@@ -112,7 +116,7 @@ func (g gateway) voiceWorker(ctx context.Context, workerID int) {
 }
 
 func (g gateway) processVoiceJob(parent context.Context, workerID int, job persistence.MediaJob) {
-	ctx, cancel := context.WithTimeout(parent, g.cfg.VoiceJobTimeout)
+	ctx, cancel := context.WithTimeout(parent, voiceJobTimeout)
 	defer cancel()
 
 	audioData, err := os.ReadFile(job.StoragePath)
