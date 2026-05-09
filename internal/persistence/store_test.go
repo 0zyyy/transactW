@@ -319,6 +319,106 @@ func TestStoreRecordOutboundIsIdempotentByProviderMessageID(t *testing.T) {
 	}
 }
 
+func TestStoreMediaJobLifecycleAndDedupe(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	store, err := Open(ctx, dsn, 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	suffix := time.Now().UnixNano()
+	stamp := time.Unix(0, suffix).Format("150405.000000000")
+	conversationKey := "whatsmeow:test:voice-job-" + stamp + "@s.whatsapp.net"
+	messageID := "wamid.voice-job." + stamp
+	if duplicate, err := store.RecordInbound(ctx, InboundMessage{
+		Provider:        "whatsmeow",
+		SessionName:     "test",
+		ConversationKey: conversationKey,
+		ChatID:          "voice-job@s.whatsapp.net",
+		SenderID:        "voice-job@s.whatsapp.net",
+		MessageID:       messageID,
+		MessageType:     "audio",
+	}); err != nil {
+		t.Fatal(err)
+	} else if duplicate {
+		t.Fatal("first inbound message should not be duplicate")
+	}
+
+	input := CreateMediaJobInput{
+		ConversationKey:   conversationKey,
+		ProviderMessageID: messageID,
+		ChatID:            "voice-job@s.whatsapp.net",
+		MediaType:         "voice_note",
+		MimeType:          "audio/ogg",
+		StoragePath:       "tmp/media/test.ogg",
+		MediaHash:         "hash-" + stamp,
+	}
+	job, duplicate, err := store.CreateMediaJob(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate {
+		t.Fatal("first media job should not be duplicate")
+	}
+	duplicateJob, duplicate, err := store.CreateMediaJob(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !duplicate {
+		t.Fatal("second media job should be duplicate")
+	}
+	if duplicateJob.ID != job.ID {
+		t.Fatalf("duplicate job id = %q, want %q", duplicateJob.ID, job.ID)
+	}
+
+	count, err := store.PendingMediaJobCount(ctx, "voice_note")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count < 1 {
+		t.Fatalf("pending media job count = %d, want at least 1", count)
+	}
+	claimed, ok, err := store.NextMediaJob(ctx, "voice_note")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected queued media job")
+	}
+	if claimed.ID != job.ID {
+		t.Fatalf("claimed job id = %q, want %q", claimed.ID, job.ID)
+	}
+	if claimed.Attempts != 1 {
+		t.Fatalf("claimed attempts = %d, want 1", claimed.Attempts)
+	}
+	terminal, err := store.MarkMediaJobFailed(ctx, claimed.ID, "temporary failure", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal {
+		t.Fatal("first failure should be retryable")
+	}
+	claimed, ok, err = store.NextMediaJob(ctx, "voice_note")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected retried media job")
+	}
+	terminal, err = store.MarkMediaJobFailed(ctx, claimed.ID, "terminal failure", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !terminal {
+		t.Fatal("second failure should be terminal")
+	}
+}
+
 func TestStoreConfirmsEditedSingleDraft(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {

@@ -17,6 +17,7 @@ from config import (
     OCR_TOTAL_DRAFT_CONFIDENCE_THRESHOLD,
     PARSER_VERSION,
     PORT,
+    VOICE_TRANSCRIBE_MODEL,
 )
 from dates import date_range, indonesian_months, last_day_of_month, normalize_date_range as normalize_date_range_for_today, start_of_week
 from normalize import normalize_category, parse_int_amount, safe_float
@@ -47,12 +48,22 @@ class Handler(BaseHTTPRequestHandler):
         self.write_json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
-        if self.path not in {"/v1/parse/text", "/v1/parse/receipt"}:
+        if self.path not in {"/v1/parse/text", "/v1/parse/receipt", "/v1/transcribe/audio"}:
             self.write_json(404, {"error": "not found"})
             return
 
         try:
             request = self.read_json()
+            if self.path == "/v1/transcribe/audio":
+                audio_base64 = str(request.get("audio_base64") or "").strip()
+                mime_type = str(request.get("mime_type") or "audio/ogg").strip()
+                if not audio_base64:
+                    self.write_json(400, {"error": "audio_base64 is required"})
+                    return
+                transcribed = transcribe_audio(audio_base64, mime_type)
+                self.write_json(200, transcribed)
+                return
+
             if self.path == "/v1/parse/receipt":
                 image_base64 = str(request.get("image_base64") or "").strip()
                 mime_type = str(request.get("mime_type") or "image/jpeg").strip()
@@ -100,6 +111,46 @@ def primary_provider() -> LLMProvider:
 
 def llm_enabled() -> bool:
     return primary_provider().enabled()
+
+
+def transcribe_audio(audio_base64: str, mime_type: str) -> dict[str, Any]:
+    provider = create_provider(INFERENCE_PROVIDER, GEMINI_API_KEY, VOICE_TRANSCRIBE_MODEL, GEMINI_TIMEOUT_SECONDS)
+    if not provider.enabled() or not getattr(provider, "supports_audio", False):
+        raise RuntimeError("audio transcription provider is disabled")
+    schema = {
+        "type": "object",
+        "properties": {
+            "transcript": {"type": "string"},
+            "language": {"type": "string"},
+            "confidence": {"type": "number"},
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["transcript", "language", "confidence", "warnings"],
+    }
+    prompt = """
+Transcribe this Indonesian WhatsApp voice note.
+Return JSON only with this shape:
+{
+  "transcript": "",
+  "language": "id",
+  "confidence": 0,
+  "warnings": []
+}
+Only transcribe the spoken words. Do not classify intent, do not parse transactions, and do not add amounts that were not spoken.
+If the audio is unclear, return the best transcript with low confidence and a warning.
+""".strip()
+    result = provider.generate_audio_json(prompt, audio_base64, mime_type, schema=schema, temperature=0.0)
+    data = result.data if isinstance(result.data, dict) else {}
+    warnings = data.get("warnings") if isinstance(data.get("warnings"), list) else []
+    return {
+        "transcript": str(data.get("transcript") or "").strip(),
+        "language": str(data.get("language") or "id").strip() or "id",
+        "confidence": safe_float(data.get("confidence"), 0.0),
+        "provider": result.provider,
+        "model": result.model,
+        "warnings": [str(item) for item in warnings],
+        "raw": data,
+    }
 
 
 def parse_with_llm(text: str, conversation: Any = None) -> tuple[dict[str, Any], ProviderResult]:

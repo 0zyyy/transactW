@@ -11,6 +11,7 @@ class GeminiProvider(LLMProvider):
     name = "gemini"
     supports_text = True
     supports_vision = True
+    supports_audio = True
     supports_response_schema = True
 
     def generate_json(self, prompt: str, schema: dict[str, Any] | None = None, temperature: float = 0.1) -> ProviderResult:
@@ -46,6 +47,33 @@ class GeminiProvider(LLMProvider):
                     "parts": [
                         {"text": prompt},
                         {"inline_data": {"mime_type": mime_type or "image/jpeg", "data": image_base64}},
+                    ]
+                }
+            ],
+            "generationConfig": generation_config,
+        }
+        return ProviderResult(self.name, self.model, self._generate_json_payload(payload))
+
+    def generate_audio_json(
+        self,
+        prompt: str,
+        audio_base64: str,
+        mime_type: str,
+        schema: dict[str, Any] | None = None,
+        temperature: float = 0.0,
+    ) -> ProviderResult:
+        generation_config: dict[str, Any] = {
+            "temperature": temperature,
+            "responseMimeType": "application/json",
+        }
+        if schema is not None:
+            generation_config["responseSchema"] = schema
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt},
+                        {"inline_data": {"mime_type": mime_type or "audio/ogg", "data": audio_base64}},
                     ]
                 }
             ],

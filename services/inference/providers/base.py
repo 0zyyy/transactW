@@ -13,6 +13,7 @@ class LLMProvider:
     name = ""
     supports_text = False
     supports_vision = False
+    supports_audio = False
     supports_response_schema = False
 
     def __init__(self, api_key: str, model: str, timeout_seconds: int) -> None:
@@ -33,5 +34,15 @@ class LLMProvider:
         mime_type: str,
         schema: dict[str, Any] | None = None,
         temperature: float = 0.1,
+    ) -> ProviderResult:
+        raise NotImplementedError
+
+    def generate_audio_json(
+        self,
+        prompt: str,
+        audio_base64: str,
+        mime_type: str,
+        schema: dict[str, Any] | None = None,
+        temperature: float = 0.0,
     ) -> ProviderResult:
         raise NotImplementedError

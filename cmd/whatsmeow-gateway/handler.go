@@ -35,7 +35,8 @@ func (g gateway) handleMessage(evt *events.Message) {
 	messageKind := "text"
 	text := extractText(evt)
 	image := evt.Message.GetImageMessage()
-	if text == "" && image == nil {
+	audio := evt.Message.GetAudioMessage()
+	if text == "" && image == nil && audio == nil {
 		return
 	}
 	if image != nil {
@@ -43,6 +44,8 @@ func (g gateway) handleMessage(evt *events.Message) {
 		if text == "" {
 			text = image.GetCaption()
 		}
+	} else if audio != nil {
+		messageKind = "audio"
 	}
 	debugReply := reply.ShouldDebug(text, g.cfg.DebugJSONReplies)
 	parseText := reply.StripDebugPrefix(text)
@@ -81,6 +84,10 @@ func (g gateway) handleMessage(evt *events.Message) {
 	conversationContext, err := inferenceContext(g.store, conversationKey)
 	if err != nil {
 		g.logger.Error("failed to load conversation context", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
+	}
+	if audio != nil {
+		g.enqueueVoiceNote(ctx, evt, audio, conversationKey, senderID)
+		return
 	}
 
 	var parsed inference.ParseTextResponse

@@ -61,6 +61,33 @@ type ReceiptUpload struct {
 	UpdatedAt         time.Time
 }
 
+type MediaJob struct {
+	ID                string
+	ConversationKey   string
+	ProviderMessageID string
+	ChatID            string
+	MediaType         string
+	MimeType          string
+	StoragePath       string
+	MediaHash         string
+	Status            string
+	Attempts          int
+	ResultJSON        string
+	ErrorMessage      string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type CreateMediaJobInput struct {
+	ConversationKey   string
+	ProviderMessageID string
+	ChatID            string
+	MediaType         string
+	MimeType          string
+	StoragePath       string
+	MediaHash         string
+}
+
 func Open(ctx context.Context, dsn string, ttl time.Duration) (*Store, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -249,6 +276,150 @@ func (s *Store) MarkReceiptFailed(ctx context.Context, conversationKey, imageHas
 		imageHash,
 	)
 	return err
+}
+
+func (s *Store) CreateMediaJob(ctx context.Context, input CreateMediaJobInput) (MediaJob, bool, error) {
+	if strings.TrimSpace(input.ConversationKey) == "" || strings.TrimSpace(input.ProviderMessageID) == "" || strings.TrimSpace(input.MediaType) == "" {
+		return MediaJob{}, false, errors.New("conversation key, provider message id, and media type are required")
+	}
+	now := time.Now().UTC()
+	job := MediaJob{
+		ID:                newID("mjob"),
+		ConversationKey:   input.ConversationKey,
+		ProviderMessageID: input.ProviderMessageID,
+		ChatID:            input.ChatID,
+		MediaType:         input.MediaType,
+		MimeType:          input.MimeType,
+		StoragePath:       input.StoragePath,
+		MediaHash:         input.MediaHash,
+		Status:            "queued",
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO media_jobs
+			(id, conversation_key, provider_message_id, chat_id, media_type, mime_type, storage_path, media_hash, status, attempts, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued', 0, $9, $10)
+		 ON CONFLICT (conversation_key, provider_message_id, media_type) DO NOTHING`,
+		job.ID,
+		job.ConversationKey,
+		job.ProviderMessageID,
+		job.ChatID,
+		job.MediaType,
+		job.MimeType,
+		job.StoragePath,
+		job.MediaHash,
+		now,
+		now,
+	)
+	if err != nil {
+		return MediaJob{}, false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return MediaJob{}, false, err
+	}
+	if affected > 0 {
+		return job, false, nil
+	}
+	existing, err := s.mediaJobByUniqueKey(ctx, input.ConversationKey, input.ProviderMessageID, input.MediaType)
+	if err != nil {
+		return MediaJob{}, false, err
+	}
+	return existing, true, nil
+}
+
+func (s *Store) PendingMediaJobCount(ctx context.Context, mediaType string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM media_jobs WHERE media_type = $1 AND status IN ('queued', 'processing')`, mediaType).Scan(&count)
+	return count, err
+}
+
+func (s *Store) NextMediaJob(ctx context.Context, mediaType string) (MediaJob, bool, error) {
+	now := time.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return MediaJob{}, false, err
+	}
+	defer rollbackUnlessDone(tx)
+
+	var job MediaJob
+	var resultJSON sql.NullString
+	var errorMessage sql.NullString
+	err = tx.QueryRowContext(
+		ctx,
+		`SELECT id, conversation_key, provider_message_id, chat_id, media_type, mime_type, storage_path, media_hash, status, attempts, result_json::text, error_message, created_at, updated_at
+		 FROM media_jobs
+		 WHERE media_type = $1 AND status = 'queued'
+		 ORDER BY created_at
+		 LIMIT 1
+		 FOR UPDATE SKIP LOCKED`,
+		mediaType,
+	).Scan(&job.ID, &job.ConversationKey, &job.ProviderMessageID, &job.ChatID, &job.MediaType, &job.MimeType, &job.StoragePath, &job.MediaHash, &job.Status, &job.Attempts, &resultJSON, &errorMessage, &job.CreatedAt, &job.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return MediaJob{}, false, tx.Commit()
+	}
+	if err != nil {
+		return MediaJob{}, false, err
+	}
+	job.ResultJSON = resultJSON.String
+	job.ErrorMessage = errorMessage.String
+	job.Attempts++
+	job.Status = "processing"
+	job.UpdatedAt = now
+	if _, err := tx.ExecContext(ctx, `UPDATE media_jobs SET status = 'processing', attempts = attempts + 1, updated_at = $1 WHERE id = $2`, now, job.ID); err != nil {
+		return MediaJob{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return MediaJob{}, false, err
+	}
+	return job, true, nil
+}
+
+func (s *Store) MarkMediaJobSucceeded(ctx context.Context, jobID string, result any) error {
+	now := time.Now().UTC()
+	body, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE media_jobs SET status = 'succeeded', result_json = $1, error_message = NULL, updated_at = $2 WHERE id = $3`, string(body), now, jobID)
+	return err
+}
+
+func (s *Store) MarkMediaJobFailed(ctx context.Context, jobID, errorMessage string, maxAttempts int) (bool, error) {
+	now := time.Now().UTC()
+	var attempts int
+	if err := s.db.QueryRowContext(ctx, `SELECT attempts FROM media_jobs WHERE id = $1`, jobID).Scan(&attempts); err != nil {
+		return true, err
+	}
+	terminal := attempts >= maxAttempts
+	status := "queued"
+	if terminal {
+		status = "failed"
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE media_jobs SET status = $1, error_message = $2, updated_at = $3 WHERE id = $4`, status, errorMessage, now, jobID)
+	return terminal, err
+}
+
+func (s *Store) mediaJobByUniqueKey(ctx context.Context, conversationKey, providerMessageID, mediaType string) (MediaJob, error) {
+	var job MediaJob
+	var resultJSON sql.NullString
+	var errorMessage sql.NullString
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, conversation_key, provider_message_id, chat_id, media_type, mime_type, storage_path, media_hash, status, attempts, result_json::text, error_message, created_at, updated_at
+		 FROM media_jobs WHERE conversation_key = $1 AND provider_message_id = $2 AND media_type = $3`,
+		conversationKey,
+		providerMessageID,
+		mediaType,
+	).Scan(&job.ID, &job.ConversationKey, &job.ProviderMessageID, &job.ChatID, &job.MediaType, &job.MimeType, &job.StoragePath, &job.MediaHash, &job.Status, &job.Attempts, &resultJSON, &errorMessage, &job.CreatedAt, &job.UpdatedAt)
+	if err != nil {
+		return MediaJob{}, err
+	}
+	job.ResultJSON = resultJSON.String
+	job.ErrorMessage = errorMessage.String
+	return job, nil
 }
 
 func (s *Store) receiptByUserHash(ctx context.Context, userID, imageHash string) (ReceiptUpload, error) {

@@ -35,7 +35,8 @@ func main() {
 	cfg := config.Load()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-	ctx := context.Background()
+	ctx, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
 	db, err := persistence.Open(ctx, cfg.DatabaseDSN, 30*time.Minute)
 	if err != nil {
 		logger.Error("failed to open persistence database", "dsn", cfg.DatabaseDSN, "error", err)
@@ -68,6 +69,7 @@ func main() {
 		logger:    logger,
 	}
 	client.AddEventHandler(gw.handleEvent)
+	gw.startVoiceWorkers(ctx)
 
 	if client.Store.ID == nil {
 		qrChan, err := client.GetQRChannel(ctx)
@@ -101,5 +103,6 @@ func main() {
 	<-stop
 
 	logger.Info("stopping whatsmeow gateway")
+	stopWorkers()
 	client.Disconnect()
 }

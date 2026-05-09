@@ -42,6 +42,24 @@ type ParseReceiptRequest struct {
 	Conversation *ConversationContext `json:"conversation,omitempty"`
 }
 
+type TranscribeAudioRequest struct {
+	Source      string `json:"source"`
+	From        string `json:"from,omitempty"`
+	MessageID   string `json:"message_id,omitempty"`
+	MimeType    string `json:"mime_type"`
+	AudioBase64 string `json:"audio_base64"`
+}
+
+type TranscribeAudioResponse struct {
+	Transcript string         `json:"transcript"`
+	Language   string         `json:"language"`
+	Confidence float64        `json:"confidence"`
+	Provider   string         `json:"provider"`
+	Model      string         `json:"model"`
+	Warnings   []string       `json:"warnings"`
+	Raw        map[string]any `json:"raw,omitempty"`
+}
+
 type ConversationContext struct {
 	HasPendingDraft bool               `json:"has_pending_draft"`
 	DraftSummary    []DraftSummaryItem `json:"draft_summary,omitempty"`
@@ -130,6 +148,34 @@ func (c Client) ParseText(ctx context.Context, req ParseTextRequest) (ParseTextR
 
 func (c Client) ParseReceipt(ctx context.Context, req ParseReceiptRequest) (ParseTextResponse, error) {
 	return c.parse(ctx, "/v1/parse/receipt", req)
+}
+
+func (c Client) TranscribeAudio(ctx context.Context, req TranscribeAudioRequest) (TranscribeAudioResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return TranscribeAudioResponse{}, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/transcribe/audio", bytes.NewReader(body))
+	if err != nil {
+		return TranscribeAudioResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return TranscribeAudioResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return TranscribeAudioResponse{}, fmt.Errorf("inference service returned status %d", resp.StatusCode)
+	}
+	var transcribed TranscribeAudioResponse
+	if err := json.NewDecoder(resp.Body).Decode(&transcribed); err != nil {
+		return TranscribeAudioResponse{}, err
+	}
+	if transcribed.Warnings == nil {
+		transcribed.Warnings = []string{}
+	}
+	return transcribed, nil
 }
 
 func (c Client) parse(ctx context.Context, path string, req any) (ParseTextResponse, error) {
