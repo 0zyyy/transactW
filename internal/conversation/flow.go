@@ -23,7 +23,7 @@ func HandleParsed(store DraftStore, conversationKey string, parsed inference.Par
 			return Result{Err: err}
 		}
 		if !ok {
-			return Result{Reply: "Belum ada draft yang bisa disimpan. Kirim transaksi dulu."}
+			return Result{Reply: "Belum ada draft yang bisa disimpan. Kirim transaksi dulu, misalnya: makan 25000 nasi padang."}
 		}
 		return Result{Reply: formatConfirmed(draft.Parsed)}
 	case "cancel_flow":
@@ -32,7 +32,7 @@ func HandleParsed(store DraftStore, conversationKey string, parsed inference.Par
 			return Result{Err: err}
 		}
 		if hadDraft {
-			return Result{Reply: "Oke, draft transaksi dibatalkan."}
+			return Result{Reply: "Draft dibatalkan."}
 		}
 		return Result{Reply: "Tidak ada draft aktif untuk dibatalkan."}
 	case "create_draft":
@@ -250,50 +250,41 @@ func formatEditDraft(parsed inference.ParseTextResponse, debug bool) string {
 	if debug {
 		return reply.Format(parsed, true)
 	}
-	if parsed.Edit != nil {
-		suffix := ""
-		if parsed.Edit.TargetItemIndex != nil {
-			suffix = fmt.Sprintf(" item %d", *parsed.Edit.TargetItemIndex)
-		}
-		return fmt.Sprintf("Koreksi kebaca untuk%s: %s. Belum diterapkan otomatis.", suffix, parsed.Edit.Field)
-	}
 	if parsed.ReplyDraft != "" {
 		return parsed.ReplyDraft
 	}
-	return "Koreksi kebaca, tapi belum diterapkan otomatis."
+	return "Koreksi belum bisa diterapkan. Contoh: yang kedua harusnya 90k, ganti kategori transport, atau catatannya jadi nasi padang."
 }
 
 func formatConfirmed(parsed inference.ParseTextResponse) string {
 	if parsed.Intent == "create_multiple_transactions" && len(parsed.Transactions) > 0 {
-		return fmt.Sprintf("Siap, %d transaksi disimpan.\nTotal: %s", len(parsed.Transactions), reply.FormatAmountIDR(valueOrZero(parsed.Amount)))
+		return fmt.Sprintf("Tersimpan: %d transaksi\nTotal: %s", len(parsed.Transactions), reply.FormatAmountIDR(valueOrZero(parsed.Amount)))
 	}
-	return fmt.Sprintf("Siap, transaksi disimpan.\nAmount: %s\nCatatan: %s", reply.FormatAmountIDR(valueOrZero(parsed.Amount)), parsed.Description)
+	description := parsed.Description
+	if description == "" {
+		description = "-"
+	}
+	return fmt.Sprintf("Tersimpan: %s - %s", reply.FormatAmountIDR(valueOrZero(parsed.Amount)), description)
 }
 
 func formatQueryResult(result QueryResult) string {
 	if result.Metric == "transaction_list" {
 		if len(result.Transactions) == 0 {
-			return fmt.Sprintf("Belum ada transaksi untuk %s s/d %s.", result.StartDate, result.EndDate)
+			return fmt.Sprintf("Belum ada transaksi untuk %s.", formatDateRange(result.StartDate, result.EndDate))
 		}
 
 		var builder strings.Builder
-		builder.WriteString(fmt.Sprintf("Transaksi %s s/d %s:\n", result.StartDate, result.EndDate))
+		builder.WriteString(fmt.Sprintf("Transaksi %s:\n", formatDateRange(result.StartDate, result.EndDate)))
 		for index, tx := range result.Transactions {
-			category := tx.CategoryName
-			if category == "" {
-				category = "Lainnya"
-			}
 			description := tx.Description
 			if description == "" {
 				description = "-"
 			}
 			builder.WriteString(fmt.Sprintf(
-				"%d. %s - %s - %s - %s\n",
+				"%d. %s - %s\n",
 				index+1,
-				tx.TransactionDate,
-				category,
-				description,
 				reply.FormatAmountIDR(tx.Amount),
+				description,
 			))
 		}
 		return strings.TrimSpace(builder.String())
@@ -305,7 +296,17 @@ func formatQueryResult(result QueryResult) string {
 	} else if result.Type == "all" {
 		label = "Total transaksi"
 	}
-	return fmt.Sprintf("%s %s s/d %s: %s", label, result.StartDate, result.EndDate, reply.FormatAmountIDR(result.Total))
+	return fmt.Sprintf("%s %s: %s", label, formatDateRange(result.StartDate, result.EndDate), reply.FormatAmountIDR(result.Total))
+}
+
+func formatDateRange(startDate, endDate string) string {
+	if startDate == endDate || endDate == "" {
+		return startDate
+	}
+	if startDate == "" {
+		return endDate
+	}
+	return startDate + " s/d " + endDate
 }
 
 func valueOrZero(value *int64) int64 {

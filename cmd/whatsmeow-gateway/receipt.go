@@ -81,7 +81,7 @@ func duplicateReceiptReply(receipt persistence.ReceiptUpload) string {
 	case "confirmed":
 		return "Struk ini sudah pernah disimpan."
 	case "pending_confirmation":
-		return "Struk ini sudah jadi draft sebelumnya. Balas `simpan` untuk simpan atau `batal` untuk batalkan."
+		return "Struk ini sudah jadi draft. Balas simpan untuk menyimpan atau batal untuk membatalkan."
 	case "processing":
 		return "Struk ini sedang diproses. Tunggu sebentar ya."
 	default:
@@ -90,5 +90,5 @@ func duplicateReceiptReply(receipt persistence.ReceiptUpload) string {
 }
 
 func unreadableReceiptReply() string {
-	return "Struknya belum kebaca jelas. Kirim foto yang lebih jelas atau lebih dekat ya."
+	return "Struknya belum kebaca jelas. Kirim foto yang lebih dekat/terang, atau ketik transaksinya manual."
 }

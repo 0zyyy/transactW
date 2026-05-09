@@ -124,6 +124,97 @@ func TestHandleParsedRejectsDeletingOnlyDraftItem(t *testing.T) {
 	}
 }
 
+func TestHandleParsedConfirmSingleUsesSavedReply(t *testing.T) {
+	store := NewStore(30 * time.Minute)
+	conversationKey := "test:conversation"
+	amount := int64(25000)
+
+	_, err := store.Save(conversationKey, inference.ParseTextResponse{
+		Intent:      "create_expense",
+		Amount:      &amount,
+		Description: "nasi padang",
+		Currency:    "IDR",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := HandleParsed(store, conversationKey, inference.ParseTextResponse{Action: "confirm_draft"}, false)
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+	if result.Reply != "Tersimpan: Rp25.000 - nasi padang" {
+		t.Fatalf("reply = %q", result.Reply)
+	}
+}
+
+func TestHandleParsedConfirmMultiUsesSavedReply(t *testing.T) {
+	store := NewStore(30 * time.Minute)
+	conversationKey := "test:conversation"
+	total := int64(140000)
+
+	_, err := store.Save(conversationKey, inference.ParseTextResponse{
+		Intent: "create_multiple_transactions",
+		Amount: &total,
+		Transactions: []inference.TransactionDraft{
+			{Amount: 40000, Description: "bioskop"},
+			{Amount: 100000, Description: "makan"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := HandleParsed(store, conversationKey, inference.ParseTextResponse{Action: "confirm_draft"}, false)
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+	for _, want := range []string{"Tersimpan: 2 transaksi", "Total: Rp140.000"} {
+		if !strings.Contains(result.Reply, want) {
+			t.Fatalf("reply missing %q: %q", want, result.Reply)
+		}
+	}
+}
+
+func TestFormatEditDraftFailureShowsExamples(t *testing.T) {
+	message := formatEditDraft(inference.ParseTextResponse{}, false)
+
+	for _, want := range []string{"yang kedua harusnya 90k", "ganti kategori transport", "catatannya jadi nasi padang"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("message missing %q: %q", want, message)
+		}
+	}
+}
+
+func TestFormatQueryResultIsCompact(t *testing.T) {
+	summary := formatQueryResult(QueryResult{
+		Metric:    "expense_total",
+		Type:      "expense",
+		StartDate: "2026-04-29",
+		EndDate:   "2026-04-29",
+		Total:     45000,
+	})
+	if summary != "Pengeluaran 2026-04-29: Rp45.000" {
+		t.Fatalf("summary = %q", summary)
+	}
+
+	list := formatQueryResult(QueryResult{
+		Metric:    "transaction_list",
+		Type:      "expense",
+		StartDate: "2026-04-29",
+		EndDate:   "2026-04-29",
+		Total:     45000,
+		Transactions: []QueryTransaction{
+			{Amount: 45000, Description: "nasi padang", CategoryName: "Makan & Minum"},
+		},
+	})
+	for _, want := range []string{"Transaksi 2026-04-29:", "1. Rp45.000 - nasi padang"} {
+		if !strings.Contains(list, want) {
+			t.Fatalf("list missing %q: %q", want, list)
+		}
+	}
+}
+
 func ptrInt64(value int64) *int64 {
 	return &value
 }

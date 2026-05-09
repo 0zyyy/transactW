@@ -18,6 +18,8 @@ func Format(parsed inference.ParseTextResponse, debug bool) string {
 	}
 
 	switch parsed.Intent {
+	case "help":
+		return formatHelp()
 	case "create_multiple_transactions":
 		return formatMultiple(parsed)
 	case "create_expense", "create_income":
@@ -25,9 +27,9 @@ func Format(parsed inference.ParseTextResponse, debug bool) string {
 	case "query_summary", "query_recent_transactions":
 		return formatQuery(parsed)
 	case "confirm_draft":
-		return "Siap, ini kebaca sebagai konfirmasi draft."
+		return "Kirim transaksi dulu, lalu balas simpan untuk menyimpan."
 	case "cancel_flow":
-		return "Siap, draft dibatalkan."
+		return "Tidak ada draft aktif untuk dibatalkan."
 	default:
 		return formatUnknown(parsed)
 	}
@@ -56,34 +58,29 @@ func formatMultiple(parsed inference.ParseTextResponse) string {
 	}
 
 	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("Aku nemu %d transaksi:\n", len(parsed.Transactions)))
+	builder.WriteString(fmt.Sprintf("Draft %d transaksi:\n", len(parsed.Transactions)))
 	for index, tx := range parsed.Transactions {
-		category := tx.CategoryHint
-		if category == "" {
-			category = "Lainnya"
-		}
 		description := tx.Description
 		if description == "" {
 			description = "-"
 		}
 		builder.WriteString(fmt.Sprintf(
-			"%d. %s - %s - %s\n",
+			"%d. %s - %s\n",
 			index+1,
-			category,
-			description,
 			FormatAmountIDR(tx.Amount),
+			description,
 		))
 	}
 	builder.WriteString("\n")
 	builder.WriteString("Total: " + FormatAmountIDR(valueOrZero(parsed.Amount)) + "\n")
-	builder.WriteString("Balas `simpan` untuk lanjut, atau `debug ...` untuk lihat JSON.")
+	builder.WriteString("Balas simpan untuk menyimpan, batal untuk membatalkan.")
 	return builder.String()
 }
 
 func formatSingle(parsed inference.ParseTextResponse) string {
-	kind := "Expense"
+	kind := "pengeluaran"
 	if parsed.Intent == "create_income" {
-		kind = "Income"
+		kind = "pemasukan"
 	}
 	category := parsed.CategoryHint
 	if category == "" {
@@ -96,25 +93,24 @@ func formatSingle(parsed inference.ParseTextResponse) string {
 
 	var builder strings.Builder
 	builder.WriteString(fmt.Sprintf(
-		"%s kebaca:\nAmount: %s\nKategori: %s\nCatatan: %s\nTanggal: %s\nConfidence: %.2f\n",
+		"Draft %s:\n%s - %s\nKategori: %s\nTanggal: %s\n",
 		kind,
 		FormatAmountIDR(valueOrZero(parsed.Amount)),
-		category,
 		description,
+		category,
 		parsed.TransactionDate,
-		parsed.Confidence,
 	))
 	if items := inference.ReceiptItems(parsed); len(items) > 0 {
-		builder.WriteString("\nItem struk yang kebaca:\n")
+		builder.WriteString("\nItem struk:\n")
 		for index, item := range items {
-			if index >= 8 {
+			if index >= 5 {
 				builder.WriteString(fmt.Sprintf("...dan %d item lain\n", len(items)-index))
 				break
 			}
 			builder.WriteString(fmt.Sprintf("%d. %s - %s\n", item.Index, item.Name, FormatAmountIDR(item.Amount)))
 		}
 	}
-	builder.WriteString("\nBalas `simpan` untuk lanjut, atau `debug ...` untuk lihat JSON.")
+	builder.WriteString("\nBalas simpan untuk menyimpan, batal untuk membatalkan.")
 	return builder.String()
 }
 
@@ -127,20 +123,39 @@ func formatQuery(parsed inference.ParseTextResponse) string {
 			return "Aku belum yakin tanggalnya. Tulis tanggal atau rentang tanggalnya lagi."
 		}
 		return fmt.Sprintf(
-			"Ini kebaca sebagai `%s`.\nMetric: %s\nTipe: %s\nTanggal: %s s/d %s\nConfidence tanggal: %.2f\n\nNanti ini akan query backend transaksi.",
-			parsed.Intent,
-			parsed.Query.Metric,
-			parsed.Query.Type,
+			"Aku cek %s %s s/d %s.",
+			queryLabel(parsed.Query),
 			parsed.Query.DateRange.StartDate,
 			parsed.Query.DateRange.EndDate,
-			parsed.Query.DateRange.Confidence,
 		)
 	}
-	return fmt.Sprintf(
-		"Ini kebaca sebagai `%s`.\nNanti ini akan query backend transaksi.\nConfidence: %.2f\n\nBalas `debug ...` untuk lihat JSON.",
-		parsed.Intent,
-		parsed.Confidence,
-	)
+	return "Aku cek datanya dulu ya."
+}
+
+func formatHelp() string {
+	return "Contoh:\n" +
+		"makan 25000 nasi padang\n" +
+		"td bioskop 40k terus makan 100k\n" +
+		"minggu ini habis berapa\n" +
+		"yang kedua harusnya 90k\n" +
+		"simpan\n" +
+		"batal"
+}
+
+func queryLabel(query *inference.QueryDraft) string {
+	if query == nil {
+		return "transaksi"
+	}
+	if query.Metric == "transaction_list" {
+		return "daftar transaksi"
+	}
+	if query.Type == "income" || query.Metric == "income_total" {
+		return "pemasukan"
+	}
+	if query.Type == "all" {
+		return "semua transaksi"
+	}
+	return "pengeluaran"
 }
 
 func formatUnknown(parsed inference.ParseTextResponse) string {
