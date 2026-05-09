@@ -70,6 +70,7 @@ func main() {
 	}
 	client.AddEventHandler(gw.handleEvent)
 	gw.startVoiceWorkers(ctx)
+	gw.startReceiptWorkers(ctx)
 
 	if client.Store.ID == nil {
 		qrChan, err := client.GetQRChannel(ctx)

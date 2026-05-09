@@ -81,58 +81,40 @@ func (g gateway) handleMessage(evt *events.Message) {
 		return
 	}
 
-	conversationContext, err := inferenceContext(g.store, conversationKey)
-	if err != nil {
-		g.logger.Error("failed to load conversation context", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
-	}
 	if audio != nil {
 		g.enqueueVoiceNote(ctx, evt, audio, conversationKey, senderID)
 		return
 	}
+	if image != nil {
+		g.enqueueReceiptImage(ctx, evt, image, conversationKey)
+		return
+	}
+
+	conversationContext, err := inferenceContext(g.store, conversationKey)
+	if err != nil {
+		g.logger.Error("failed to load conversation context", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
+	}
 
 	var parsed inference.ParseTextResponse
-	imageHash := ""
-	if image != nil {
-		var handled bool
-		parsed, imageHash, handled = g.parseReceiptImage(ctx, evt, image, senderID, conversationKey, parseText, conversationContext)
-		if handled {
-			return
-		}
-	} else {
-		parsed, err = g.inference.ParseText(ctx, inference.ParseTextRequest{
-			Source:       "whatsmeow",
-			From:         senderID,
-			MessageID:    evt.Info.ID,
-			Text:         parseText,
-			Conversation: conversationContext,
-		})
-		if err != nil {
-			g.logger.Error("failed to parse whatsmeow message", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "message_type", messageKind, "error", err)
-			return
-		}
+	parsed, err = g.inference.ParseText(ctx, inference.ParseTextRequest{
+		Source:       "whatsmeow",
+		From:         senderID,
+		MessageID:    evt.Info.ID,
+		Text:         parseText,
+		Conversation: conversationContext,
+	})
+	if err != nil {
+		g.logger.Error("failed to parse whatsmeow message", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "message_type", messageKind, "error", err)
+		return
 	}
 
-	if imageHash != "" {
-		if parsed.Raw == nil {
-			parsed.Raw = map[string]any{}
-		}
-		parsed.Raw["image_hash"] = imageHash
-	}
 	if err := g.db.RecordParserRun(ctx, conversationKey, evt.Info.ID, parsed); err != nil {
 		g.logger.Error("failed to record parser run", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
-	}
-	if image != nil && g.handleReceiptParseOutcome(ctx, evt, conversationKey, imageHash, parsed) {
-		return
 	}
 
 	flowResult := conversation.HandleParsed(g.store, conversationKey, parsed, debugReply)
 	if flowResult.Err != nil {
 		g.logger.Error("failed to handle conversation flow", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", flowResult.Err)
-		if imageHash != "" {
-			if markErr := g.db.MarkReceiptFailed(ctx, conversationKey, imageHash); markErr != nil {
-				g.logger.Error("failed to mark receipt flow failure", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", markErr)
-			}
-		}
 		return
 	}
 

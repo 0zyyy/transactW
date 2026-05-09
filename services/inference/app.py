@@ -369,6 +369,12 @@ def route_parse(text: str, conversation: Any = None) -> dict[str, Any]:
 
 
 def route_parse_receipt(image_base64: str, mime_type: str, caption: str, conversation: Any = None) -> dict[str, Any]:
+    if OCR_ENGINE == "gemini_vision":
+        try:
+            return route_parse_receipt_with_gemini_vision(image_base64, mime_type, caption, "gemini_vision_primary")
+        except Exception as exc:
+            return receipt_ocr_clarification(caption, f"gemini_vision_error:{exc}")
+
     if llm_enabled():
         try:
             return route_parse_receipt_with_gemini_vision(image_base64, mime_type, caption, "gemini_vision_primary")

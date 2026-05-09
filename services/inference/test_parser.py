@@ -200,6 +200,7 @@ def routing_cases(parser: Any) -> list[dict[str, Any]]:
     previous_parse_with_llm = parser.parse_with_llm
     previous_parse_receipt_with_vision_llm = parser.parse_receipt_with_vision_llm
     previous_extract_text_with_doctr = parser.extract_text_with_doctr
+    previous_ocr_engine = parser.OCR_ENGINE
     cases: list[dict[str, Any]] = []
     try:
         parser.GEMINI_API_KEY = "test-key"
@@ -323,11 +324,31 @@ def routing_cases(parser: Any) -> list[dict[str, Any]]:
                 },
             }
         )
+
+        def fail_extract_text_for_gemini_vision(image_base64: str) -> dict[str, Any]:
+            raise AssertionError("OCR_ENGINE=gemini_vision should not call docTR")
+
+        parser.OCR_ENGINE = "gemini_vision"
+        parser.parse_receipt_with_vision_llm = fail_parse_receipt_with_vision_llm
+        parser.extract_text_with_doctr = fail_extract_text_for_gemini_vision
+        cases.append(
+            {
+                "name": "routing does not fall back to doctr for explicit gemini vision engine",
+                "input": "receipt image gemini vision only",
+                "parsed": parser.route_parse_receipt("image", "image/jpeg", ""),
+                "expect": {
+                    "intent": "unknown",
+                    "action": "ask_clarification",
+                    "raw_provider": "receipt_ocr_failed",
+                },
+            }
+        )
     finally:
         parser.GEMINI_API_KEY = previous_key
         parser.parse_with_llm = previous_parse_with_llm
         parser.parse_receipt_with_vision_llm = previous_parse_receipt_with_vision_llm
         parser.extract_text_with_doctr = previous_extract_text_with_doctr
+        parser.OCR_ENGINE = previous_ocr_engine
     return cases
 
 
