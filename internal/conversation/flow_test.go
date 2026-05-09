@@ -143,7 +143,7 @@ func TestHandleParsedConfirmSingleUsesSavedReply(t *testing.T) {
 	if result.Err != nil {
 		t.Fatal(result.Err)
 	}
-	if result.Reply != "Tersimpan: Rp25.000 - nasi padang" {
+	if result.Reply != "*Tersimpan*\n\nRp25.000 - nasi padang" {
 		t.Fatalf("reply = %q", result.Reply)
 	}
 }
@@ -169,7 +169,7 @@ func TestHandleParsedConfirmMultiUsesSavedReply(t *testing.T) {
 	if result.Err != nil {
 		t.Fatal(result.Err)
 	}
-	for _, want := range []string{"Tersimpan: 2 transaksi", "Total: Rp140.000"} {
+	for _, want := range []string{"*Tersimpan*", "2 transaksi", "*Total: Rp140.000*"} {
 		if !strings.Contains(result.Reply, want) {
 			t.Fatalf("reply missing %q: %q", want, result.Reply)
 		}
@@ -194,7 +194,7 @@ func TestFormatQueryResultIsCompact(t *testing.T) {
 		EndDate:   "2026-04-29",
 		Total:     45000,
 	})
-	if summary != "Pengeluaran 2026-04-29: Rp45.000" {
+	if summary != "*Pengeluaran 2026-04-29*\n\nRp45.000" {
 		t.Fatalf("summary = %q", summary)
 	}
 
@@ -208,7 +208,7 @@ func TestFormatQueryResultIsCompact(t *testing.T) {
 			{Amount: 45000, Description: "nasi padang", CategoryName: "Makan & Minum"},
 		},
 	})
-	for _, want := range []string{"Transaksi 2026-04-29:", "1. Rp45.000 - nasi padang"} {
+	for _, want := range []string{"*Transaksi 2026-04-29*", "1. Rp45.000 - nasi padang"} {
 		if !strings.Contains(list, want) {
 			t.Fatalf("list missing %q: %q", want, list)
 		}

@@ -27,9 +27,9 @@ func Format(parsed inference.ParseTextResponse, debug bool) string {
 	case "query_summary", "query_recent_transactions":
 		return formatQuery(parsed)
 	case "confirm_draft":
-		return "Kirim transaksi dulu, lalu balas simpan untuk menyimpan."
+		return "*Belum ada draft*\n\nKirim transaksi dulu, lalu balas *simpan* untuk menyimpan."
 	case "cancel_flow":
-		return "Tidak ada draft aktif untuk dibatalkan."
+		return "*Tidak ada draft aktif*\n\nKirim transaksi baru kalau mau mulai lagi."
 	default:
 		return formatUnknown(parsed)
 	}
@@ -58,7 +58,7 @@ func formatMultiple(parsed inference.ParseTextResponse) string {
 	}
 
 	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("Draft %d transaksi:\n", len(parsed.Transactions)))
+	builder.WriteString(fmt.Sprintf("*Draft %d transaksi*\n\n", len(parsed.Transactions)))
 	for index, tx := range parsed.Transactions {
 		description := tx.Description
 		if description == "" {
@@ -72,8 +72,8 @@ func formatMultiple(parsed inference.ParseTextResponse) string {
 		))
 	}
 	builder.WriteString("\n")
-	builder.WriteString("Total: " + FormatAmountIDR(valueOrZero(parsed.Amount)) + "\n")
-	builder.WriteString("Balas simpan untuk menyimpan, batal untuk membatalkan.")
+	builder.WriteString("*Total: " + FormatAmountIDR(valueOrZero(parsed.Amount)) + "*\n\n")
+	builder.WriteString("Balas *simpan* untuk menyimpan semua atau *batal* untuk membatalkan.")
 	return builder.String()
 }
 
@@ -93,7 +93,7 @@ func formatSingle(parsed inference.ParseTextResponse) string {
 
 	var builder strings.Builder
 	builder.WriteString(fmt.Sprintf(
-		"Draft %s:\n%s - %s\nKategori: %s\nTanggal: %s\n",
+		"*Draft %s*\n\n%s\n%s\n\nKategori: %s\nTanggal: %s\n",
 		kind,
 		FormatAmountIDR(valueOrZero(parsed.Amount)),
 		description,
@@ -101,7 +101,7 @@ func formatSingle(parsed inference.ParseTextResponse) string {
 		parsed.TransactionDate,
 	))
 	if items := inference.ReceiptItems(parsed); len(items) > 0 {
-		builder.WriteString("\nItem struk:\n")
+		builder.WriteString("\n*Item struk*\n")
 		for index, item := range items {
 			if index >= 5 {
 				builder.WriteString(fmt.Sprintf("...dan %d item lain\n", len(items)-index))
@@ -110,7 +110,7 @@ func formatSingle(parsed inference.ParseTextResponse) string {
 			builder.WriteString(fmt.Sprintf("%d. %s - %s\n", item.Index, item.Name, FormatAmountIDR(item.Amount)))
 		}
 	}
-	builder.WriteString("\nBalas simpan untuk menyimpan, batal untuk membatalkan.")
+	builder.WriteString("\nBalas *simpan* untuk menyimpan atau *batal* untuk membatalkan.")
 	return builder.String()
 }
 
@@ -120,26 +120,25 @@ func formatQuery(parsed inference.ParseTextResponse) string {
 			if parsed.Query.ClarificationPrompt != "" {
 				return parsed.Query.ClarificationPrompt
 			}
-			return "Aku belum yakin tanggalnya. Tulis tanggal atau rentang tanggalnya lagi."
+			return "*Tanggal belum jelas*\n\nTulis tanggal atau rentang tanggalnya lagi."
 		}
 		return fmt.Sprintf(
-			"Aku cek %s %s s/d %s.",
+			"*Aku cek dulu*\n\n%s %s s/d %s.",
 			queryLabel(parsed.Query),
 			parsed.Query.DateRange.StartDate,
 			parsed.Query.DateRange.EndDate,
 		)
 	}
-	return "Aku cek datanya dulu ya."
+	return "*Aku cek dulu*\n\nSebentar ya."
 }
 
 func formatHelp() string {
-	return "Contoh:\n" +
-		"makan 25000 nasi padang\n" +
-		"td bioskop 40k terus makan 100k\n" +
-		"minggu ini habis berapa\n" +
-		"yang kedua harusnya 90k\n" +
-		"simpan\n" +
-		"batal"
+	return "*Contoh yang bisa kamu kirim*\n\n" +
+		"1. makan 25000 nasi padang\n" +
+		"2. td bioskop 40k terus makan 100k\n" +
+		"3. minggu ini habis berapa\n" +
+		"4. yang kedua harusnya 90k\n\n" +
+		"Balas *simpan* untuk menyimpan draft atau *batal* untuk membatalkan."
 }
 
 func queryLabel(query *inference.QueryDraft) string {
@@ -160,12 +159,12 @@ func queryLabel(query *inference.QueryDraft) string {
 
 func formatUnknown(parsed inference.ParseTextResponse) string {
 	if len(parsed.MissingFields) > 0 {
-		return "Aku belum bisa baca transaksi ini. Field yang kurang: " + strings.Join(parsed.MissingFields, ", ")
+		return "*Transaksi belum lengkap*\n\nYang kurang: " + strings.Join(parsed.MissingFields, ", ")
 	}
 	if strings.TrimSpace(parsed.Intent) == "" || parsed.Intent == "unknown" {
-		return "Aku belum yakin maksudnya apa. Bisa tulis lagi lebih jelas?"
+		return "*Aku belum paham*\n\nBisa tulis lagi lebih jelas?"
 	}
-	return fmt.Sprintf("Aku belum yakin maksudnya apa. Intent terbaca: `%s`.", parsed.Intent)
+	return fmt.Sprintf("*Aku belum paham*\n\nIntent terbaca: `%s`.", parsed.Intent)
 }
 
 func FormatAmountIDR(amount int64) string {

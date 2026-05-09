@@ -13,7 +13,7 @@ func TestFormatUnknownBlankIntentIsFriendly(t *testing.T) {
 	if strings.Contains(message, "``") {
 		t.Fatalf("message should not expose blank intent: %q", message)
 	}
-	if message != "Aku belum yakin maksudnya apa. Bisa tulis lagi lebih jelas?" {
+	if message != "*Aku belum paham*\n\nBisa tulis lagi lebih jelas?" {
 		t.Fatalf("message = %q", message)
 	}
 }
@@ -42,7 +42,7 @@ func TestFormatSingleDraftIsCompact(t *testing.T) {
 			t.Fatalf("message should not expose %q: %q", debugText, message)
 		}
 	}
-	for _, want := range []string{"Draft pengeluaran", "Rp25.000 - nasi padang", "Balas simpan"} {
+	for _, want := range []string{"*Draft pengeluaran*", "Rp25.000", "nasi padang", "Balas *simpan*"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("message missing %q: %q", want, message)
 		}
@@ -60,7 +60,7 @@ func TestFormatMultipleDraftIsCompact(t *testing.T) {
 		},
 	}, false)
 
-	for _, want := range []string{"Draft 2 transaksi", "1. Rp40.000 - bioskop", "2. Rp100.000 - makan", "Total: Rp140.000"} {
+	for _, want := range []string{"*Draft 2 transaksi*", "1. Rp40.000 - bioskop", "2. Rp100.000 - makan", "*Total: Rp140.000*"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("message missing %q: %q", want, message)
 		}

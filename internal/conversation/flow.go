@@ -23,7 +23,7 @@ func HandleParsed(store DraftStore, conversationKey string, parsed inference.Par
 			return Result{Err: err}
 		}
 		if !ok {
-			return Result{Reply: "Belum ada draft yang bisa disimpan. Kirim transaksi dulu, misalnya: makan 25000 nasi padang."}
+			return Result{Reply: "*Belum ada draft*\n\nKirim transaksi dulu, misalnya: makan 25000 nasi padang."}
 		}
 		return Result{Reply: formatConfirmed(draft.Parsed)}
 	case "cancel_flow":
@@ -32,9 +32,9 @@ func HandleParsed(store DraftStore, conversationKey string, parsed inference.Par
 			return Result{Err: err}
 		}
 		if hadDraft {
-			return Result{Reply: "Draft dibatalkan."}
+			return Result{Reply: "*Draft dibatalkan*\n\nKirim transaksi baru kalau mau mulai lagi."}
 		}
-		return Result{Reply: "Tidak ada draft aktif untuk dibatalkan."}
+		return Result{Reply: "*Tidak ada draft aktif*\n\nKirim transaksi baru kalau mau mulai lagi."}
 	case "create_draft":
 		if IsDraftIntent(parsed.Intent) {
 			if _, err := store.Save(conversationKey, parsed); err != nil {
@@ -52,7 +52,7 @@ func HandleParsed(store DraftStore, conversationKey string, parsed inference.Par
 		if err != nil {
 			return Result{Err: err}
 		} else if !ok {
-			return Result{Reply: "Belum ada draft yang bisa dikoreksi. Kirim transaksi dulu."}
+			return Result{Reply: "*Belum ada draft*\n\nKirim transaksi dulu sebelum mengoreksi."}
 		}
 		updated, ok := applyEditDraft(draft.Parsed, parsed)
 		if !ok {
@@ -61,7 +61,7 @@ func HandleParsed(store DraftStore, conversationKey string, parsed inference.Par
 		if _, err := store.Save(conversationKey, updated); err != nil {
 			return Result{Err: err}
 		}
-		return Result{Reply: "Draft diperbarui:\n\n" + reply.Format(updated, debug), SaveDraft: true, Draft: &updated}
+		return Result{Reply: "*Draft diperbarui*\n\n" + reply.Format(updated, debug), SaveDraft: true, Draft: &updated}
 	case "ask_clarification":
 		if parsed.ClarificationPrompt != "" {
 			return Result{Reply: parsed.ClarificationPrompt}
@@ -258,23 +258,23 @@ func formatEditDraft(parsed inference.ParseTextResponse, debug bool) string {
 
 func formatConfirmed(parsed inference.ParseTextResponse) string {
 	if parsed.Intent == "create_multiple_transactions" && len(parsed.Transactions) > 0 {
-		return fmt.Sprintf("Tersimpan: %d transaksi\nTotal: %s", len(parsed.Transactions), reply.FormatAmountIDR(valueOrZero(parsed.Amount)))
+		return fmt.Sprintf("*Tersimpan*\n\n%d transaksi\n*Total: %s*", len(parsed.Transactions), reply.FormatAmountIDR(valueOrZero(parsed.Amount)))
 	}
 	description := parsed.Description
 	if description == "" {
 		description = "-"
 	}
-	return fmt.Sprintf("Tersimpan: %s - %s", reply.FormatAmountIDR(valueOrZero(parsed.Amount)), description)
+	return fmt.Sprintf("*Tersimpan*\n\n%s - %s", reply.FormatAmountIDR(valueOrZero(parsed.Amount)), description)
 }
 
 func formatQueryResult(result QueryResult) string {
 	if result.Metric == "transaction_list" {
 		if len(result.Transactions) == 0 {
-			return fmt.Sprintf("Belum ada transaksi untuk %s.", formatDateRange(result.StartDate, result.EndDate))
+			return fmt.Sprintf("*Belum ada transaksi*\n\nPeriode: %s", formatDateRange(result.StartDate, result.EndDate))
 		}
 
 		var builder strings.Builder
-		builder.WriteString(fmt.Sprintf("Transaksi %s:\n", formatDateRange(result.StartDate, result.EndDate)))
+		builder.WriteString(fmt.Sprintf("*Transaksi %s*\n\n", formatDateRange(result.StartDate, result.EndDate)))
 		for index, tx := range result.Transactions {
 			description := tx.Description
 			if description == "" {
@@ -296,7 +296,7 @@ func formatQueryResult(result QueryResult) string {
 	} else if result.Type == "all" {
 		label = "Total transaksi"
 	}
-	return fmt.Sprintf("%s %s: %s", label, formatDateRange(result.StartDate, result.EndDate), reply.FormatAmountIDR(result.Total))
+	return fmt.Sprintf("*%s %s*\n\n%s", label, formatDateRange(result.StartDate, result.EndDate), reply.FormatAmountIDR(result.Total))
 }
 
 func formatDateRange(startDate, endDate string) string {

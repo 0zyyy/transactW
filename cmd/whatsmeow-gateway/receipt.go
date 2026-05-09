@@ -30,16 +30,16 @@ func (g gateway) enqueueReceiptImage(ctx context.Context, evt *events.Message, i
 		return false
 	}
 	if g.cfg.MediaQueueMaxPending > 0 && pending >= g.cfg.MediaQueueMaxPending {
-		return g.sendAndRecordReply(ctx, evt, conversationKey, "Lagi banyak struk yang diproses. Coba lagi nanti atau ketik transaksinya.", "receipt queue full reply")
+		return g.sendAndRecordReply(ctx, evt, conversationKey, "*Antrean struk penuh*\n\nCoba lagi nanti atau ketik transaksinya.", "receipt queue full reply")
 	}
 
 	imageData, err := g.client.Download(ctx, image)
 	if err != nil {
 		g.logger.Error("failed to download whatsmeow image", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
-		return g.sendAndRecordReply(ctx, evt, conversationKey, "Struk belum bisa diproses. Coba kirim ulang atau ketik transaksinya.", "receipt download failure reply")
+		return g.sendAndRecordReply(ctx, evt, conversationKey, "*Struk belum bisa diproses*\n\nCoba kirim ulang atau ketik transaksinya.", "receipt download failure reply")
 	}
 	if len(imageData) > receiptImageMaxBytes {
-		return g.sendAndRecordReply(ctx, evt, conversationKey, "Foto struk terlalu besar. Coba kirim foto yang lebih kecil atau ketik transaksinya.", "receipt too large reply")
+		return g.sendAndRecordReply(ctx, evt, conversationKey, "*Foto struk terlalu besar*\n\nCoba kirim foto yang lebih kecil atau ketik transaksinya.", "receipt too large reply")
 	}
 	storagePath, imageHash, err := writeTempMedia(g.cfg.MediaTempDir, receiptImageMediaType, evt.Info.ID, imageData)
 	if err != nil {
@@ -63,14 +63,14 @@ func (g gateway) enqueueReceiptImage(ctx context.Context, evt *events.Message, i
 	}
 	if duplicate {
 		removeTempMedia(storagePath)
-		message := "Struk ini sudah diterima."
+		message := "*Struk sudah diterima*"
 		if job.Status == "queued" || job.Status == "processing" {
-			message = "Struk ini masih diproses."
+			message = "*Struk masih diproses*\n\nAku kabari setelah selesai."
 		}
 		return g.sendAndRecordReply(ctx, evt, conversationKey, message, "duplicate receipt job reply")
 	}
 	g.logger.Info("queued receipt image", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "job_id", job.ID, "image_hash", imageHash)
-	return g.sendAndRecordReply(ctx, evt, conversationKey, "Struk diterima, sedang diproses.", "receipt queued reply")
+	return g.sendAndRecordReply(ctx, evt, conversationKey, "*Struk diterima*\n\nSedang diproses. Aku kabari setelah selesai.", "receipt queued reply")
 }
 
 func (g gateway) startReceiptWorkers(ctx context.Context) {
@@ -234,16 +234,16 @@ func (g gateway) failReceiptJob(ctx context.Context, job persistence.MediaJob, e
 func duplicateReceiptReply(receipt persistence.ReceiptUpload) string {
 	switch receipt.Status {
 	case "confirmed":
-		return "Struk ini sudah pernah disimpan."
+		return "*Struk sudah pernah disimpan*"
 	case "pending_confirmation":
-		return "Struk ini sudah jadi draft. Balas simpan untuk menyimpan atau batal untuk membatalkan."
+		return "*Struk sudah jadi draft*\n\nBalas *simpan* untuk menyimpan atau *batal* untuk membatalkan."
 	case "processing":
-		return "Struk ini sedang diproses. Tunggu sebentar ya."
+		return "*Struk sedang diproses*\n\nTunggu sebentar ya."
 	default:
-		return "Struk ini sudah pernah dikirim sebelumnya."
+		return "*Struk sudah pernah dikirim*"
 	}
 }
 
 func unreadableReceiptReply() string {
-	return "Struknya belum kebaca jelas. Kirim foto yang lebih dekat/terang, atau ketik transaksinya manual."
+	return "*Struk belum kebaca jelas*\n\nKirim foto yang lebih dekat/terang, atau ketik transaksinya manual."
 }

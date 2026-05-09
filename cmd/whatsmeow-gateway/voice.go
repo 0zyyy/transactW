@@ -28,7 +28,7 @@ const (
 
 func (g gateway) enqueueVoiceNote(ctx context.Context, evt *events.Message, audio *waProto.AudioMessage, conversationKey, senderID string) bool {
 	if !g.cfg.VoiceNoteEnabled {
-		return g.sendAndRecordReply(ctx, evt, conversationKey, "Voice note belum aktif. Ketik transaksinya dulu ya.", "voice disabled reply")
+		return g.sendAndRecordReply(ctx, evt, conversationKey, "*Voice note belum aktif*\n\nKetik transaksinya dulu ya.", "voice disabled reply")
 	}
 	pending, err := g.db.PendingMediaJobCount(ctx, voiceNoteMediaType)
 	if err != nil {
@@ -36,16 +36,16 @@ func (g gateway) enqueueVoiceNote(ctx context.Context, evt *events.Message, audi
 		return false
 	}
 	if g.cfg.MediaQueueMaxPending > 0 && pending >= g.cfg.MediaQueueMaxPending {
-		return g.sendAndRecordReply(ctx, evt, conversationKey, "Lagi banyak voice note yang diproses. Coba lagi nanti atau ketik transaksinya.", "voice queue full reply")
+		return g.sendAndRecordReply(ctx, evt, conversationKey, "*Antrean voice note penuh*\n\nCoba lagi nanti atau ketik transaksinya.", "voice queue full reply")
 	}
 
 	audioData, err := g.client.Download(ctx, audio)
 	if err != nil {
 		g.logger.Error("failed to download voice note", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "error", err)
-		return g.sendAndRecordReply(ctx, evt, conversationKey, "Voice note belum bisa diproses. Coba kirim ulang atau ketik transaksinya.", "voice download failure reply")
+		return g.sendAndRecordReply(ctx, evt, conversationKey, "*Voice note belum bisa diproses*\n\nCoba kirim ulang atau ketik transaksinya.", "voice download failure reply")
 	}
 	if len(audioData) > voiceNoteMaxBytes {
-		return g.sendAndRecordReply(ctx, evt, conversationKey, "Voice note terlalu panjang. Coba kirim yang lebih pendek atau ketik transaksinya.", "voice too large reply")
+		return g.sendAndRecordReply(ctx, evt, conversationKey, "*Voice note terlalu panjang*\n\nCoba kirim yang lebih pendek atau ketik transaksinya.", "voice too large reply")
 	}
 	storagePath, mediaHash, err := writeTempMedia(g.cfg.MediaTempDir, voiceNoteMediaType, evt.Info.ID, audioData)
 	if err != nil {
@@ -69,14 +69,14 @@ func (g gateway) enqueueVoiceNote(ctx context.Context, evt *events.Message, audi
 	}
 	if duplicate {
 		removeTempMedia(storagePath)
-		message := "Voice note ini sudah diterima."
+		message := "*Voice note sudah diterima*"
 		if job.Status == "queued" || job.Status == "processing" {
-			message = "Voice note ini masih diproses."
+			message = "*Voice note masih diproses*\n\nAku kabari setelah selesai."
 		}
 		return g.sendAndRecordReply(ctx, evt, conversationKey, message, "duplicate voice job reply")
 	}
 	g.logger.Info("queued voice note", "chat", evt.Info.Chat.String(), "message_id", evt.Info.ID, "sender", senderID, "job_id", job.ID)
-	return g.sendAndRecordReply(ctx, evt, conversationKey, "Voice note diterima, sedang diproses.", "voice queued reply")
+	return g.sendAndRecordReply(ctx, evt, conversationKey, "*Voice note diterima*\n\nSedang diproses. Aku kabari setelah selesai.", "voice queued reply")
 }
 
 func (g gateway) startVoiceWorkers(ctx context.Context) {
@@ -203,7 +203,7 @@ func (g gateway) failVoiceJob(ctx context.Context, job persistence.MediaJob, err
 		g.logger.Warn("voice job will retry", "job_id", job.ID, "attempt", job.Attempts, "error", err)
 		return
 	}
-	_ = g.sendTextToChat(ctx, job.ChatID, job.ConversationKey, "Aku belum yakin isi voice note-nya. Bisa ketik transaksinya?", "voice failure reply")
+	_ = g.sendTextToChat(ctx, job.ChatID, job.ConversationKey, "*Voice note belum kebaca jelas*\n\nBisa ketik transaksinya?", "voice failure reply")
 	removeTempMedia(job.StoragePath)
 	g.logger.Error("voice job failed permanently", "job_id", job.ID, "error", err)
 }
