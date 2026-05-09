@@ -122,7 +122,9 @@ func (s *Store) RecordOutbound(ctx context.Context, msg OutboundMessage) error {
 		ctx,
 		`INSERT INTO whatsapp_messages
 			(id, conversation_key, provider_message_id, direction, message_type, body, status, created_at)
-		 VALUES ($1, $2, $3, 'outbound', 'text', $4, 'sent', $5)`,
+		 VALUES ($1, $2, $3, 'outbound', 'text', $4, 'sent', $5)
+		 ON CONFLICT (conversation_key, provider_message_id, direction)
+		 DO UPDATE SET body = excluded.body, status = excluded.status, created_at = excluded.created_at`,
 		newID("wam"),
 		msg.ConversationKey,
 		nullableString(msg.MessageID),
@@ -499,7 +501,12 @@ func loadPendingDraft(ctx context.Context, tx *sql.Tx, conversationKey string, n
 	var expiresAt time.Time
 	err := tx.QueryRowContext(
 		ctx,
-		`SELECT id, COALESCE(user_id, ''), raw_json, created_at, expires_at FROM transaction_drafts WHERE conversation_key = $1 AND status = 'pending_confirmation' AND expires_at > $2 ORDER BY created_at DESC LIMIT 1`,
+		`SELECT id, COALESCE(user_id, ''), raw_json, created_at, expires_at
+		 FROM transaction_drafts
+		 WHERE conversation_key = $1 AND status = 'pending_confirmation' AND expires_at > $2
+		 ORDER BY created_at DESC
+		 LIMIT 1
+		 FOR UPDATE`,
 		conversationKey,
 		now,
 	).Scan(&id, &userID, &raw, &createdAt, &expiresAt)

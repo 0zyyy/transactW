@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -180,6 +181,141 @@ func TestStoreConfirmIsIdempotentAfterDraftIsConfirmed(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected exactly 1 transaction after duplicate confirm, got %d", count)
+	}
+}
+
+func TestStoreConcurrentConfirmOnlyCreatesOneTransaction(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	store, err := Open(ctx, dsn, 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	suffix := time.Now().UnixNano()
+	stamp := time.Unix(0, suffix).Format("150405.000000000")
+	conversationKey := "whatsmeow:test:confirm-concurrent-" + stamp + "@s.whatsapp.net"
+	description := "concurrent confirm nasi padang " + stamp
+	if duplicate, err := store.RecordInbound(ctx, InboundMessage{
+		Provider:        "whatsmeow",
+		SessionName:     "test",
+		ConversationKey: conversationKey,
+		ChatID:          "confirm-concurrent@s.whatsapp.net",
+		SenderID:        "confirm-concurrent@s.whatsapp.net",
+		MessageID:       "wamid.confirm-concurrent." + stamp,
+		MessageType:     "text",
+		Body:            description,
+	}); err != nil {
+		t.Fatal(err)
+	} else if duplicate {
+		t.Fatal("first inbound message should not be duplicate")
+	}
+
+	amount := int64(25000)
+	if _, err := store.Save(conversationKey, inference.ParseTextResponse{
+		Intent:          "create_expense",
+		Amount:          &amount,
+		Currency:        "IDR",
+		Description:     description,
+		CategoryHint:    "Makan & Minum",
+		TransactionDate: "2026-04-29",
+		Confidence:      0.91,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	type confirmResult struct {
+		ok  bool
+		err error
+	}
+	results := make(chan confirmResult, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, ok, err := store.Confirm(conversationKey)
+			results <- confirmResult{ok: ok, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	okCount := 0
+	for result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.ok {
+			okCount++
+		}
+	}
+	if okCount != 1 {
+		t.Fatalf("successful confirms = %d, want 1", okCount)
+	}
+
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM transactions WHERE description = $1`, description).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("transaction count = %d, want 1", count)
+	}
+}
+
+func TestStoreRecordOutboundIsIdempotentByProviderMessageID(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	store, err := Open(ctx, dsn, 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	suffix := time.Now().UnixNano()
+	stamp := time.Unix(0, suffix).Format("150405.000000000")
+	conversationKey := "whatsmeow:test:outbound-idempotent-" + stamp + "@s.whatsapp.net"
+	messageID := "wamid.outbound-idempotent." + stamp
+	outbound := OutboundMessage{
+		Provider:        "whatsmeow",
+		SessionName:     "test",
+		ConversationKey: conversationKey,
+		ChatID:          "outbound-idempotent@s.whatsapp.net",
+		MessageID:       messageID,
+		Body:            "first reply",
+	}
+	if err := store.RecordOutbound(ctx, outbound); err != nil {
+		t.Fatal(err)
+	}
+	outbound.Body = "retried reply"
+	if err := store.RecordOutbound(ctx, outbound); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	var body string
+	if err := store.db.QueryRow(
+		`SELECT COUNT(*), COALESCE(MAX(body), '') FROM whatsapp_messages WHERE conversation_key = $1 AND provider_message_id = $2 AND direction = 'outbound'`,
+		conversationKey,
+		messageID,
+	).Scan(&count, &body); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("outbound message count = %d, want 1", count)
+	}
+	if body != "retried reply" {
+		t.Fatalf("outbound body = %q, want retried reply", body)
 	}
 }
 
