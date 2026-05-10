@@ -194,7 +194,7 @@ func TestFormatQueryResultIsCompact(t *testing.T) {
 		EndDate:   "2026-04-29",
 		Total:     45000,
 	})
-	if summary != "*Pengeluaran 2026-04-29*\n\nRp45.000" {
+	if summary != "*Pengeluaran*\n\nPeriode: 2026-04-29\nTotal: Rp45.000" {
 		t.Fatalf("summary = %q", summary)
 	}
 
@@ -205,12 +205,24 @@ func TestFormatQueryResultIsCompact(t *testing.T) {
 		EndDate:   "2026-04-29",
 		Total:     45000,
 		Transactions: []QueryTransaction{
-			{Amount: 45000, Description: "nasi padang", CategoryName: "Makan & Minum"},
+			{Amount: 45000, TransactionDate: "2026-04-29", Description: "nasi padang", CategoryName: "Makan & Minum"},
 		},
 	})
-	for _, want := range []string{"*Transaksi 2026-04-29*", "1. Rp45.000 - nasi padang"} {
+	for _, want := range []string{"*Transaksi*", "Periode: 2026-04-29", "1. Rp45.000 - nasi padang", "2026-04-29 - Makan & Minum", "Total: Rp45.000 dari 1 transaksi"} {
 		if !strings.Contains(list, want) {
 			t.Fatalf("list missing %q: %q", want, list)
+		}
+	}
+
+	empty := formatQueryResult(QueryResult{
+		Metric:    "transaction_list",
+		Type:      "expense",
+		StartDate: "2026-04-01",
+		EndDate:   "2026-04-29",
+	})
+	for _, want := range []string{"*Belum ada transaksi*", "Periode: 2026-04-01 s/d 2026-04-29", "Coba cek periode lain."} {
+		if !strings.Contains(empty, want) {
+			t.Fatalf("empty result missing %q: %q", want, empty)
 		}
 	}
 }

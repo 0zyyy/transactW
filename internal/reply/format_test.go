@@ -70,6 +70,32 @@ func TestFormatMultipleDraftIsCompact(t *testing.T) {
 	}
 }
 
+func TestFormatReceiptDraftShowsReceiptContext(t *testing.T) {
+	amount := int64(46200)
+	message := Format(inference.ParseTextResponse{
+		Intent:          "create_expense",
+		Amount:          &amount,
+		MerchantName:    "Vision Store",
+		CategoryHint:    "Belanja Harian",
+		TransactionDate: "2026-04-27",
+		Raw: map[string]any{
+			"receipt_ocr": map[string]any{
+				"merchant": "Vision Store",
+				"line_items": []any{
+					map[string]any{"name": "Kopi", "amount": float64(18000), "confidence": 0.95},
+					map[string]any{"name": "Roti", "amount": float64(12000), "confidence": 0.92},
+				},
+			},
+		},
+	}, false)
+
+	for _, want := range []string{"*Draft dari struk*", "Total: Rp46.200", "Merchant: Vision Store", "Tanggal: 2026-04-27", "Kategori: Belanja Harian", "*Item terbaca*", "1. Kopi - Rp18.000", "2. Roti - Rp12.000"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("message missing %q: %q", want, message)
+		}
+	}
+}
+
 func TestFormatHelpIncludesExamples(t *testing.T) {
 	message := Format(inference.ParseTextResponse{Intent: "help", Action: "show_help"}, false)
 

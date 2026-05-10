@@ -270,11 +270,12 @@ func formatConfirmed(parsed inference.ParseTextResponse) string {
 func formatQueryResult(result QueryResult) string {
 	if result.Metric == "transaction_list" {
 		if len(result.Transactions) == 0 {
-			return fmt.Sprintf("*Belum ada transaksi*\n\nPeriode: %s", formatDateRange(result.StartDate, result.EndDate))
+			return fmt.Sprintf("*Belum ada transaksi*\n\nPeriode: %s\nCoba cek periode lain.", formatDateRange(result.StartDate, result.EndDate))
 		}
 
 		var builder strings.Builder
-		builder.WriteString(fmt.Sprintf("*Transaksi %s*\n\n", formatDateRange(result.StartDate, result.EndDate)))
+		builder.WriteString("*Transaksi*\n\n")
+		builder.WriteString(fmt.Sprintf("Periode: %s\n\n", formatDateRange(result.StartDate, result.EndDate)))
 		for index, tx := range result.Transactions {
 			description := tx.Description
 			if description == "" {
@@ -286,7 +287,12 @@ func formatQueryResult(result QueryResult) string {
 				reply.FormatAmountIDR(tx.Amount),
 				description,
 			))
+			detail := queryTransactionDetail(tx)
+			if detail != "" {
+				builder.WriteString("   " + detail + "\n")
+			}
 		}
+		builder.WriteString(fmt.Sprintf("\nTotal: %s dari %d transaksi", reply.FormatAmountIDR(result.Total), len(result.Transactions)))
 		return strings.TrimSpace(builder.String())
 	}
 
@@ -296,7 +302,18 @@ func formatQueryResult(result QueryResult) string {
 	} else if result.Type == "all" {
 		label = "Total transaksi"
 	}
-	return fmt.Sprintf("*%s %s*\n\n%s", label, formatDateRange(result.StartDate, result.EndDate), reply.FormatAmountIDR(result.Total))
+	return fmt.Sprintf("*%s*\n\nPeriode: %s\nTotal: %s", label, formatDateRange(result.StartDate, result.EndDate), reply.FormatAmountIDR(result.Total))
+}
+
+func queryTransactionDetail(tx QueryTransaction) string {
+	var parts []string
+	if tx.TransactionDate != "" {
+		parts = append(parts, tx.TransactionDate)
+	}
+	if tx.CategoryName != "" {
+		parts = append(parts, tx.CategoryName)
+	}
+	return strings.Join(parts, " - ")
 }
 
 func formatDateRange(startDate, endDate string) string {

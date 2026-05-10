@@ -78,6 +78,10 @@ func formatMultiple(parsed inference.ParseTextResponse) string {
 }
 
 func formatSingle(parsed inference.ParseTextResponse) string {
+	if hasReceiptRaw(parsed) {
+		return formatReceiptDraft(parsed)
+	}
+
 	kind := "pengeluaran"
 	if parsed.Intent == "create_income" {
 		kind = "pemasukan"
@@ -102,6 +106,44 @@ func formatSingle(parsed inference.ParseTextResponse) string {
 	))
 	if items := inference.ReceiptItems(parsed); len(items) > 0 {
 		builder.WriteString("\n*Item struk*\n")
+		for index, item := range items {
+			if index >= 5 {
+				builder.WriteString(fmt.Sprintf("...dan %d item lain\n", len(items)-index))
+				break
+			}
+			builder.WriteString(fmt.Sprintf("%d. %s - %s\n", item.Index, item.Name, FormatAmountIDR(item.Amount)))
+		}
+	}
+	builder.WriteString("\nBalas *simpan* untuk menyimpan atau *batal* untuk membatalkan.")
+	return builder.String()
+}
+
+func formatReceiptDraft(parsed inference.ParseTextResponse) string {
+	category := parsed.CategoryHint
+	if category == "" {
+		category = "Lainnya"
+	}
+	merchant := parsed.MerchantName
+	if merchant == "" {
+		merchant = receiptRaw(parsed, "merchant")
+	}
+	date := parsed.TransactionDate
+	if date == "" {
+		date = "-"
+	}
+
+	var builder strings.Builder
+	builder.WriteString("*Draft dari struk*\n\n")
+	builder.WriteString("Total: " + FormatAmountIDR(valueOrZero(parsed.Amount)) + "\n")
+	if merchant != "" {
+		builder.WriteString("Merchant: " + merchant + "\n")
+	}
+	builder.WriteString("Tanggal: " + date + "\n")
+	builder.WriteString("Kategori: " + category + "\n")
+
+	items := inference.ReceiptItems(parsed)
+	if len(items) > 0 {
+		builder.WriteString("\n*Item terbaca*\n")
 		for index, item := range items {
 			if index >= 5 {
 				builder.WriteString(fmt.Sprintf("...dan %d item lain\n", len(items)-index))
@@ -165,6 +207,28 @@ func formatUnknown(parsed inference.ParseTextResponse) string {
 		return "*Aku belum paham*\n\nBisa tulis lagi lebih jelas?"
 	}
 	return fmt.Sprintf("*Aku belum paham*\n\nIntent terbaca: `%s`.", parsed.Intent)
+}
+
+func receiptRaw(parsed inference.ParseTextResponse, key string) string {
+	receiptOCR, ok := receiptOCRRaw(parsed)
+	if !ok {
+		return ""
+	}
+	value, _ := receiptOCR[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func hasReceiptRaw(parsed inference.ParseTextResponse) bool {
+	_, ok := receiptOCRRaw(parsed)
+	return ok
+}
+
+func receiptOCRRaw(parsed inference.ParseTextResponse) (map[string]any, bool) {
+	if parsed.Raw == nil {
+		return nil, false
+	}
+	receiptOCR, ok := parsed.Raw["receipt_ocr"].(map[string]any)
+	return receiptOCR, ok
 }
 
 func FormatAmountIDR(amount int64) string {
