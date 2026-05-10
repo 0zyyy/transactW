@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -888,6 +889,99 @@ func TestReceiptUploadHashAllowsDifferentUsersAndFailedRetry(t *testing.T) {
 		t.Fatal(err)
 	} else if duplicate {
 		t.Fatal("same hash from different user should not be duplicate")
+	}
+}
+
+func TestReceiptImageMediaJobLifecycle(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	store, err := Open(ctx, dsn, 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	stamp := time.Unix(0, time.Now().UnixNano()).Format("150405.000000000")
+	conversationKey := "whatsmeow:test:receipt-job-" + stamp + "@s.whatsapp.net"
+	messageID := "wamid.receipt-job." + stamp
+	chatID := "receipt-job-" + stamp + "@s.whatsapp.net"
+	if duplicate, err := store.RecordInbound(ctx, InboundMessage{
+		Provider:        "whatsmeow",
+		SessionName:     "test",
+		ConversationKey: conversationKey,
+		ChatID:          chatID,
+		SenderID:        chatID,
+		MessageID:       messageID,
+		MessageType:     "image",
+	}); err != nil {
+		t.Fatal(err)
+	} else if duplicate {
+		t.Fatal("first inbound message should not be duplicate")
+	}
+
+	input := CreateMediaJobInput{
+		ConversationKey:   conversationKey,
+		ProviderMessageID: messageID,
+		ChatID:            chatID,
+		MediaType:         "receipt_image",
+		MimeType:          "image/jpeg",
+		StoragePath:       "tmp/media/test-receipt.jpg",
+		MediaHash:         "receipt-hash-" + stamp,
+	}
+	job, duplicate, err := store.CreateMediaJob(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate {
+		t.Fatal("first receipt media job should not be duplicate")
+	}
+	duplicateJob, duplicate, err := store.CreateMediaJob(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !duplicate || duplicateJob.ID != job.ID {
+		t.Fatalf("duplicate job = (%v, %q), want duplicate id %q", duplicate, duplicateJob.ID, job.ID)
+	}
+
+	claimed, ok, err := store.NextMediaJob(ctx, "receipt_image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected queued receipt image job")
+	}
+	if claimed.ID != job.ID || claimed.Attempts != 1 {
+		t.Fatalf("claimed job = (%q, attempts %d), want (%q, attempts 1)", claimed.ID, claimed.Attempts, job.ID)
+	}
+	terminal, err := store.MarkMediaJobFailed(ctx, claimed.ID, "temporary receipt failure", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal {
+		t.Fatal("first receipt failure should be retryable")
+	}
+	claimed, ok, err = store.NextMediaJob(ctx, "receipt_image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || claimed.Attempts != 2 {
+		t.Fatalf("retry claim = (%v, attempts %d), want ok with attempts 2", ok, claimed.Attempts)
+	}
+	if err := store.MarkMediaJobSucceeded(ctx, claimed.ID, map[string]any{"image_hash": input.MediaHash, "action": "create_draft"}); err != nil {
+		t.Fatal(err)
+	}
+	var status, resultJSON string
+	if err := store.db.QueryRowContext(ctx, `SELECT status, result_json::text FROM media_jobs WHERE id = $1`, job.ID).Scan(&status, &resultJSON); err != nil {
+		t.Fatal(err)
+	}
+	if status != "succeeded" {
+		t.Fatalf("status = %q, want succeeded", status)
+	}
+	if !strings.Contains(resultJSON, input.MediaHash) || !strings.Contains(resultJSON, "create_draft") {
+		t.Fatalf("result json missing expected values: %s", resultJSON)
 	}
 }
 

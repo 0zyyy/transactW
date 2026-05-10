@@ -12,7 +12,9 @@ import (
 
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
+	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	_ "modernc.org/sqlite"
 
@@ -23,12 +25,23 @@ import (
 )
 
 type gateway struct {
-	client    *whatsmeow.Client
+	client    whatsmeowClient
 	cfg       config.Config
-	inference inference.Client
+	inference inferenceClient
 	store     conversation.DraftStore
 	db        *persistence.Store
 	logger    *slog.Logger
+}
+
+type whatsmeowClient interface {
+	Download(context.Context, whatsmeow.DownloadableMessage) ([]byte, error)
+	SendMessage(context.Context, types.JID, *waProto.Message, ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error)
+}
+
+type inferenceClient interface {
+	ParseText(context.Context, inference.ParseTextRequest) (inference.ParseTextResponse, error)
+	ParseReceipt(context.Context, inference.ParseReceiptRequest) (inference.ParseTextResponse, error)
+	TranscribeAudio(context.Context, inference.TranscribeAudioRequest) (inference.TranscribeAudioResponse, error)
 }
 
 func main() {
